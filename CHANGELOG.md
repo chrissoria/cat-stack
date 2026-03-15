@@ -35,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Embedding centroid tiebreaker** (`embedding_tiebreaker` parameter in `classify()`): Resolves true consensus ties (equal votes for 0 and 1) using embedding centroids built from unanimously-agreed rows. Compares tied texts to positive and negative centroids via cosine similarity. Adds `category_N_resolved_by` columns to output. Requires `pip install cat-llm[embeddings]`. Text input only, multi-model ensemble only, not supported in batch mode.
   - New parameter: `min_centroid_size` (int, default 3) — minimum unanimous rows needed to build centroids.
-  - New internal module: `src/catllm/_tiebreaker.py`.
+  - New internal module: `src/cat_stack/_tiebreaker.py`.
 
 ---
 
@@ -64,7 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Chunked category classification** (`categories_per_call` parameter in `classify()`): Splits large category lists into smaller chunks, runs a separate LLM call per chunk with local 1..N numbering, and merges results back into global numbering. Reduces prompt complexity per call and can improve accuracy for large category sets (20+). Each chunk automatically gets a temporary "Other" catch-all category to give the LLM an escape hatch for ambiguous responses; the "Other" is dropped before merging. A unified "Other" column is added to the output when all real categories are 0 but at least one chunk flagged "Other". Not supported with `batch_mode=True`. Works with all input types (text, PDF, image), all providers, ensemble mode, and all prompting strategies.
-  - New internal module: `src/catllm/_chunked.py` with `run_chunked_classification()` and `_run_single_chunk_call()`.
+  - New internal module: `src/cat_stack/_chunked.py` with `run_chunked_classification()` and `_run_single_chunk_call()`.
 
 ---
 
@@ -75,13 +75,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ollama support for `explore()` and `extract()`**: Local Ollama models now get the same pre-flight validation as `classify()` — checks that Ollama is running, verifies the model is available, offers auto-download for missing models, and warns about system resources. New `auto_download` parameter on both functions.
 - **Single-label classification mode** (`multi_label=False` in `classify()`): Switches from the default multi-label mode (multiple categories can be 1) to single-label mode (exactly one best category gets 1, all others 0). Only the prompt text changes — JSON schema, parsing, validation, ensemble consensus, and DataFrame output format are all unchanged. Works with all input types (text, PDF, image), all prompting strategies (CoT, context prompt, step-back), and batch mode.
 - **Ensemble batch mode (experimental)**: `batch_mode=True` now works with multi-model ensembles. Each model submits its own batch job concurrently via `ThreadPoolExecutor`; results are merged through the existing `aggregate_results` + `build_output_dataframes` pipeline and return the same DataFrame format as synchronous ensemble mode (per-model columns, `_consensus`, `_agreement`). Providers without a batch API (HuggingFace, Perplexity, Ollama) fall back to synchronous calls automatically. Prints an `[CatLLM] NOTE: experimental` warning when used.
-  - New internal helpers: `_run_one_batch_job` (extracted from `run_batch_classify`), `_run_one_sync_model` (sync fallback), and `run_batch_ensemble_classify` (orchestrator) in `src/catllm/_batch.py`.
+  - New internal helpers: `_run_one_batch_job` (extracted from `run_batch_classify`), `_run_one_sync_model` (sync fallback), and `run_batch_ensemble_classify` (orchestrator) in `src/cat_stack/_batch.py`.
 - **Embedding-based similarity scores** (`embeddings=True` in `classify()`): Adds `category_N_similarity` columns (0–1 float) alongside the binary 0/1 classification columns. Uses a local sentence-transformer model (`BAAI/bge-small-en-v1.5`, 33M params, ~130MB) to compute cosine similarity between each input text and each category. Requires `pip install cat-llm[embeddings]`.
   - New parameters: `embeddings` (bool, default `False`) and `category_descriptions` (dict, default `None` — optional richer text per category for improved similarity, e.g. `{"Financial reasons (...)": "The person moved because of money, high rent, ..."}`).
   - Scores are independent per (text, category) pair — no softmax across categories. Works with single-model and ensemble modes. Skipped automatically for PDF/image input. Model downloaded from HuggingFace Hub on first use.
-  - New internal module: `src/catllm/_embeddings.py`. New optional dependency group: `[embeddings]` (installs `sentence-transformers`).
+  - New internal module: `src/cat_stack/_embeddings.py`. New optional dependency group: `[embeddings]` (installs `sentence-transformers`).
 - **`json_formatter=True` in `classify()`**: Opt-in local JSON formatter fallback that uses a fine-tuned Qwen2.5-0.5B model to fix malformed classification JSON before marking responses as failed. The formatter only runs when `extract_json()` produces invalid output — zero cost on the happy path. On first use, the model (~1GB) is downloaded from HuggingFace Hub ([chrissoria/catllm-json-formatter](https://huggingface.co/chrissoria/catllm-json-formatter)). Requires `pip install cat-llm[formatter]`.
-- **`src/catllm/_formatter.py`**: New internal module with `ensure_formatter_available()`, `load_formatter()`, and `run_formatter()` functions for the JSON formatter fallback.
+- **`src/cat_stack/_formatter.py`**: New internal module with `ensure_formatter_available()`, `load_formatter()`, and `run_formatter()` functions for the JSON formatter fallback.
 - **`[formatter]` optional dependency group**: `pip install cat-llm[formatter]` installs `torch`, `transformers`, and `accelerate`.
 
 ---
@@ -96,7 +96,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Returns the same simplified DataFrame format as synchronous single-model mode: `category_1`, `category_2`, ... columns with no model suffix, consensus, or agreement columns.
 - **`BatchJobExpiredError`**: New exception raised when a batch job expires or is cancelled. Includes the job ID for provider dashboard lookup.
 - **`BatchJobFailedError`**: New exception raised when a batch job terminates in a failed state.
-- **`src/catllm/_batch.py`**: New internal module implementing all batch logic (JSONL building, file upload, job creation, polling, result download and parsing) for all five supported providers via pure HTTP — no provider SDKs required.
+- **`src/cat_stack/_batch.py`**: New internal module implementing all batch logic (JSONL building, file upload, job creation, polling, result download and parsing) for all five supported providers via pure HTTP — no provider SDKs required.
 
 ### Fixed
 - **Google (Gemini) batch**: Switched from file-upload to inline requests format; fixed terminal state names (`BATCH_STATE_SUCCEEDED` not `JOB_STATE_SUCCEEDED`); fixed result extraction path (`response.inlinedResponses.inlinedResponses`); fixed response ordering — Google returns results out of order, so responses are now mapped via `metadata.key` rather than positional index. Verified: ≤0.3pp accuracy delta vs synchronous calls.
@@ -110,7 +110,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.5.0] - 2026-02-26
 
 ### Added
-- **`has_other_category()` utility**: New function in `catllm._category_analysis` that detects whether a category list contains a catch-all / "Other" category. Uses a two-tier heuristic (anchored patterns for exact matches, phrase patterns for short categories) with an optional LLM fallback for ambiguous cases.
+- **`has_other_category()` utility**: New function in `cat_stack._category_analysis` that detects whether a category list contains a catch-all / "Other" category. Uses a two-tier heuristic (anchored patterns for exact matches, phrase patterns for short categories) with an optional LLM fallback for ambiguous cases.
 - **`add_other` parameter in `classify()`**: Automatically detects when categories lack a catch-all "Other" option and prompts the user to add one. Supports three modes: `"prompt"` (default, interactive), `True` (silent), `False` (disabled). Including an "Other" category improves accuracy by giving models an outlet for ambiguous responses.
 - **`check_category_verbosity()` utility**: New function that uses a single LLM call to assess whether each category has a description and examples. Returns per-category flags (`has_description`, `has_examples`, `is_verbose`).
 - **`check_verbosity` parameter in `classify()`**: Alerts users when categories lack descriptions or examples (1 API call). Verbose categories with descriptions and examples improve accuracy by ~7 pp over bare labels. Default `True`.
@@ -444,7 +444,7 @@ Most code will work without changes. Key differences:
 - UCNets example usage documentation
 
 ### Changed
-- Package can now be imported as `catllm` instead of `cat_llm`
+- Package can now be imported as `cat_stack` instead of `cat_llm`
 
 ---
 

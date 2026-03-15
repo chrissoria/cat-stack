@@ -1,7 +1,7 @@
 from setuptools import setup
 import os
 
-VERSION = ""0.0.3""
+VERSION = "0.1.0"
 
 
 def get_long_description():
@@ -13,11 +13,9 @@ def get_long_description():
 
 
 setup(
-    name="catllm",
-    description="catllm is now cat-llm",
+    name="cat-stack",
+    description="Domain-agnostic text, image, and PDF classification engine powered by LLMs",
     long_description=get_long_description(),
     long_description_content_type="text/markdown",
     version=VERSION,
-    install_requires=["cat-llm"],
-    classifiers=["Development Status :: 7 - Inactive"],
 )

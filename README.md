@@ -1,688 +1,112 @@
-![catllm Logo](https://github.com/chrissoria/cat-llm/blob/main/images/logo.png?raw=True)
+# cat-stack
 
-# cat-llm
+**Domain-agnostic text, image, and PDF classification engine powered by LLMs.**
 
-CatLLM: A Reproducible LLM Pipeline for Coding Open-Ended Survey Responses
-
-[![PyPI - Version](https://img.shields.io/pypi/v/cat-llm.svg)](https://pypi.org/project/cat-llm)
-[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/cat-llm.svg)](https://pypi.org/project/cat-llm)
-
------
-
-## The Problem
-
-If you work with open-ended survey data, you know the pain: hundreds or thousands of free-text responses that need to be categorized before you can do any quantitative analysis. The traditional approach is manual coding—either doing it yourself or hiring research assistants. It's slow, expensive, and doesn't scale.
-
-## The Solution
-
-CatLLM is a Python package designed specifically for survey research that uses LLMs to automate the categorization of open-ended responses. It handles both:
-
-- **Category Assignment**: Classify responses into your predefined categories (multi-label supported)
-- **Category Extraction**: Automatically discover and extract categories from your data when you don't have a predefined scheme
-- **Category Exploration**: Analyze category stability and saturation through repeated raw extraction
-
-With leading models like GPT-5, Gemini, and Qwen 3, CatLLM achieves **98% accuracy compared to human consensus** on classification tasks.
-
-**Try the web app:** [https://huggingface.co/spaces/CatLLM/survey-classifier](https://huggingface.co/spaces/CatLLM/survey-classifier)
-
------
-
-## Table of Contents
-
-- [Installation](#installation)
-  - [R Package](#r-package)
-- [Quick Start](#quick-start)
-- [Best Practices for Classification](#best-practices-for-classification)
-- [Configuration](#configuration)
-- [Supported Models](#supported-models)
-- [API Reference](#api-reference)
-  - [classify()](#classify) - Unified function for text, image, and PDF (auto-detects input type)
-  - [extract()](#extract) - Unified function for category extraction
-  - [explore()](#explore) - Raw category extraction for saturation analysis
-  - [summarize()](#summarize) - Unified function for text and PDF summarization
-  - [image_score_drawing()](#image_score_drawing)
-  - [image_features()](#image_features)
-  - [cerad_drawn_score()](#cerad_drawn_score)
-- [Deprecated Functions](#deprecated-functions)
-- [Related Projects](#related-projects)
-- [Academic Research](#academic-research)
-- [Contributing & Support](#contributing--support)
-- [License](#license)
+`cat-stack` is the shared base package for the [CatLLM](https://github.com/chrissoria/cat-llm) ecosystem. It provides the core classification, extraction, exploration, and summarization engine that all domain-specific CatLLM packages build on.
 
 ## Installation
 
-```console
-pip install cat-llm
+```bash
+pip install cat-stack
 ```
 
-For PDF support:
-```console
-pip install cat-llm[pdf]
+Optional extras:
+
+```bash
+pip install cat-stack[pdf]         # PDF support (PyMuPDF)
+pip install cat-stack[embeddings]  # Embedding similarity scoring
+pip install cat-stack[formatter]   # JSON formatter fallback model
 ```
 
-For embedding-based similarity scores:
-```console
-pip install cat-llm[embeddings]
-```
+## Ecosystem
 
-For the local JSON formatter fallback:
-```console
-pip install cat-llm[formatter]
-```
+`cat-stack` is independently useful for classifying any text column. Domain-specific packages extend it with tuned prompts and workflows:
 
-> **Note:** Web data collection (`build_dataset_from_web`) has been moved to its own package due to its different focus. Install it separately:
-> ```console
-> pip install llm-web-research
-> ```
-> See [llm-web-research](https://github.com/chrissoria/llm-web-research) for details.
+| Package | Domain |
+|---------|--------|
+| **cat-stack** | General-purpose text, image, PDF classification (this package) |
+| **cat-survey** | Survey response classification |
+| **cat-vader** | Social media text (Reddit, Twitter/X) |
+| **cat-ademic** | Academic papers, PDFs, citations |
+| **cat-pol** | Political text (manifestos, speeches, legislation) |
 
-### R Package
-
-An R wrapper is available for users who prefer R over Python. It uses [reticulate](https://rstudio.github.io/reticulate/) to call the Python package under the hood.
-
-```r
-# Install from GitHub
-devtools::install_github("chrissoria/cat-llm", subdir = "r-package/catllm")
-
-# Install the Python backend (one-time setup)
-catllm::install_catllm()
-```
-
-All three core functions — `classify()`, `extract()`, and `explore()` — are available with native R syntax. See the [R package README](r-package/catllm/README.md) for full documentation and examples.
-
------
+Installing `cat-llm` pulls in all of the above.
 
 ## Quick Start
 
-**This package is designed for building datasets at scale**, not one-off queries. While you can categorize individual responses, its primary purpose is batch processing entire survey columns or image collections into structured research datasets.
+```python
+import cat_stack as cat
 
-Simply provide your survey responses and category list—the package handles the rest and outputs clean data ready for statistical analysis. It works with single or multiple categories per response and automatically skips missing data to save API costs.
+# Classify text into predefined categories
+result = cat.classify(
+    input_data=df["text_column"],
+    categories=["Positive", "Negative", "Neutral"],
+    models=[("gpt-4o", "openai", OPENAI_KEY)],
+    output_file="classified.csv"
+)
+```
 
-Also supports **image and PDF classification** using the same methodology: extract features, count objects, identify categories, or determine presence of elements based on your research questions.
-
-All outputs are formatted for immediate statistical analysis and can be exported directly to CSV.
-
-*Not to be confused with CAT-LLM for Chinese article‐style transfer ([Tao et al. 2024](https://arxiv.org/html/2401.05707v1)).*
-
-
-
-## Best Practices for Classification
-
-These recommendations are based on empirical testing across 4 surveys, 4 models (7B to frontier-class), and 250-row subsamples compared against human-coded ground truth.
-
-### What works
-
-- **Detailed category descriptions**: The single biggest lever for accuracy. Instead of short labels like `"Job change"`, use verbose descriptions like `"The person had a job or school or career change, including transferred and retired."` This consistently improves accuracy across all models by several percentage points.
-- **Include an "Other" category**: Adding a catch-all category like `"Other: The response does not fit any of the above categories."` prevents the model from forcing ambiguous responses into ill-fitting categories, improving precision.
-- **Few-shot examples** (`example1`–`example6`): Providing 2–4 labeled examples can help, particularly for weaker models. Effects are modest (+0–1 pp on average) and model-dependent.
-- **Low temperature** (`creativity=0`): For classification tasks, deterministic output is generally preferable. Higher temperatures introduce noise without improving accuracy.
-
-### What doesn't help (or hurts)
-
-- **Chain of Thought** (`chain_of_thought`): In our testing, enabling COT did not improve classification accuracy for any model and slightly degraded it for some. It is now off by default.
-- **Chain of Verification** (`chain_of_verification`): CoVE uses ~4x the API calls per response for a self-verification loop. Despite the added cost, it consistently reduced accuracy by 1–2 percentage points, primarily by retracting correct classifications during the verification step. Not recommended for classification tasks.
-- **Step-back prompting** (`step_back_prompt`): Results were inconsistent — slight gains for weaker models (~+1.8 pp) but slight losses for stronger models (~-0.5 pp), with high variance across surveys. Not recommended as a default strategy.
-- **Context prompting** (`context_prompt`): Adds generic expert context to the prompt. No consistent benefit observed.
-
-### Summary
-
-The most effective approach is straightforward: **write detailed category descriptions, include an "Other" category, and use a capable model at low temperature.** Advanced prompting strategies add complexity and cost without reliable gains for classification tasks.
-
------
-
-## Configuration
-
-### Get Your API Key
-
-Get an API key from your preferred provider:
-
-- **OpenAI**: [platform.openai.com](https://platform.openai.com)
-- **Anthropic**: [console.anthropic.com](https://console.anthropic.com)
-- **Google**: [aistudio.google.com](https://aistudio.google.com)
-- **Huggingface**: [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
-- **xAI**: [console.x.ai](https://console.x.ai)
-- **Mistral**: [console.mistral.ai](https://console.mistral.ai)
-- **Perplexity**: [perplexity.ai/settings/api](https://www.perplexity.ai/settings/api)
-
-Most providers require adding a payment method and purchasing credits. Store your key securely and never share it publicly.
-
-## Supported Models
-
-- **OpenAI**: GPT-4o, GPT-4, GPT-5, etc.
-- **Anthropic**: Claude Sonnet 4, Claude 3.5 Sonnet, Claude Haiku, etc.
-- **Google**: Gemini 2.5 Flash, Gemini 2.5 Pro, etc.
-- **Huggingface**: Qwen, Llama 4, DeepSeek, and thousands of community models
-- **xAI**: Grok models
-- **Mistral**: Mistral Large, Pixtral, etc.
-- **Perplexity**: Sonar Large, Sonar Small, etc.
-
-**Fully Tested:**
-- OpenAI (GPT-4, GPT-4o, GPT-5, etc.)
-- Anthropic (Claude Sonnet 4, Claude 3.5 Sonnet, Haiku)
-- Perplexity (Sonar models)
-- Google Gemini - Free tier has severe rate limits (5 RPM). Requires Google AI Studio billing account for large-scale use.
-- Huggingface - Access to Qwen, Llama 4, DeepSeek, and thousands of user-trained models for specific tasks. API routing can occasionally be unstable.
-- xAI (Grok models)
-- Mistral (Mistral Large, Pixtral, etc.)
-
-**Note:** For best results, I recommend starting with OpenAI or Anthropic.
-
-
-## API Reference
+## Core API
 
 ### `classify()`
-
-Unified classification function for text, image, and PDF inputs. **Input type is auto-detected** from your data—no need to specify whether you're classifying text, images, or PDFs.
-
-Supports both **single-model** and **multi-model ensemble** classification for improved accuracy through consensus voting.
-
-**Parameters:**
-- `input_data`: The data to classify. Can be:
-  - Text: list of strings or pandas Series
-  - Images: directory path, single file, or list of image paths
-  - PDFs: directory path, single file, or list of PDF paths
-- `categories` (list): List of category names for classification
-- `api_key` (str): API key for the LLM service (single-model mode)
-- `description` (str): Description of the input data context
-- `user_model` (str, default="gpt-4o"): Model to use
-- `mode` (str, default="image"): PDF processing mode - "image", "text", or "both"
-- `creativity` (float, optional): Temperature setting (0.0-1.0)
-- `survey_question` (str, default=""): The survey question respondents were asked. Provides important context for classification.
-- `safety` (bool, default=False): Save progress after each row. If the process fails midway, you won't lose your work. Requires `filename`.
-- `chain_of_thought` (bool, default=False): Enable step-by-step reasoning within a single prompt. Low cost increase.
-- `context_prompt` (bool, default=False): Add expert analyst role to the prompt. Minimal cost increase.
-- `step_back_prompt` (bool, default=False): Ask the model to consider broader conceptual background before classifying. Moderate cost increase.
-- `chain_of_verification` (bool, default=False): Multi-prompt verification loop where the model checks its own work. High cost increase (3-5x).
-- `example1`–`example6` (str, optional): Few-shot examples to guide classification (up to 6).
-- `filename` (str, optional): Output filename for CSV
-- `save_directory` (str, optional): Directory to save results
-- `model_source` (str, default="auto"): Provider - "auto", "openai", "anthropic", "google", "mistral", "perplexity", "huggingface", "xai"
-- `multi_label` (bool, default=True): If True, multiple categories can be assigned per input (multi-label). If False, the model picks the single best category (single-label). Output format is unchanged—still one 0/1 column per category.
-- `categories_per_call` (int, default=None): Maximum number of categories per LLM call. When set, splits the category list into chunks, runs a separate call per chunk, and merges results. Each chunk automatically gets a temporary "Other" catch-all to improve accuracy. A unified "Other" column is added to the output when all real categories are 0 but at least one chunk's "Other" fired. Useful for large category sets (20+). Not supported with `batch_mode=True`.
-- `models` (list, optional): For multi-model ensemble, list of `(model, provider, api_key)` or `(model, provider, api_key, config_dict)` tuples
-- `consensus_threshold` (str or float, default="unanimous"): Agreement threshold for ensemble mode. Options: `"unanimous"` (100%, default — best accuracy), `"majority"` (50%), `"two-thirds"` (67%), or a custom float between 0 and 1.
-- `parallel` (bool, default=None): Controls concurrent vs sequential model execution in ensemble mode. `None` (default) auto-detects: sequential for local models (Ollama), parallel for cloud providers. Set `True` to force parallel or `False` to force sequential. Sequential mode is useful for resource-constrained environments or debugging.
-- `batch_mode` (bool, default=False): *(Experimental)* Submit the entire job as an async batch request instead of making synchronous calls. Supported providers: OpenAI, Anthropic, Google, Mistral, xAI. Reduces API costs by ~50%. Works with both single-model and multi-model ensemble (each model submits its own batch job concurrently; providers without batch API fall back to synchronous calls). Not compatible with PDF/image inputs. The function blocks until the batch completes.
-- `batch_poll_interval` (float, default=30.0): Seconds between status polls when `batch_mode=True`.
-- `batch_timeout` (float, default=86400.0): Maximum seconds to wait for a batch job before raising `BatchJobExpiredError`.
-- `embeddings` (bool, default=False): Add embedding-based similarity scores alongside binary 0/1 classifications. Adds `category_N_similarity` columns (0–1 float) using a local sentence-transformer model (`BAAI/bge-small-en-v1.5`, ~130MB). Text input only (skipped for PDF/image). Requires `pip install cat-llm[embeddings]`.
-- `category_descriptions` (dict, optional): Richer text descriptions per category for embedding similarity (e.g., `{"Past_Support": "References to help received from family"}`). Only used when `embeddings=True`.
-- `embedding_tiebreaker` (bool, default=False): When ensemble consensus produces a tie (equal votes for 0 and 1), use embedding centroid similarity to break the tie. Requires `pip install cat-llm[embeddings]`.
-- `min_centroid_size` (int, default=3): Minimum number of confirmed-positive responses needed to build a reliable centroid for `embedding_tiebreaker`. If fewer positives exist, falls back to raw similarity against the category text.
-- `json_formatter` (bool, default=False): Use a local fine-tuned model to fix malformed JSON output before marking responses as failed. The formatter runs only when `extract_json()` produces invalid output—zero cost on the happy path. On first use, the model (~1GB) is downloaded from HuggingFace Hub. Requires `pip install cat-llm[formatter]`.
-- `add_other` (str or bool, default="prompt"): Controls auto-addition of an "Other" catch-all category. `"prompt"` asks the user, `True` adds silently, `False` never adds.
-- `check_verbosity` (bool, default=True): Check whether categories have descriptions and examples (1 API call). Set to False to skip.
-- `use_json_schema` (bool, default=True): Use structured JSON schema for LLM output. Set to False for providers that don't support it well.
-- `max_categories` (int, default=12): Maximum categories for auto-extraction when `categories="auto"`.
-- `categories_per_chunk` (int, default=10): Categories to extract per chunk during auto-extraction.
-- `divisions` (int, default=10): Number of chunks to divide data into during auto-extraction.
-- `research_question` (str, optional): Research context to guide classification.
-- `row_delay` (float, default=0.0): Seconds to wait between processing each row. Useful for rate-limited APIs (e.g., Google free tier at 5 RPM).
-- `max_retries` (int, default=5): Maximum number of retries for failed API calls per row.
-- `retry_delay` (float, default=1.0): Base delay in seconds between retries (uses exponential backoff).
-- `fail_strategy` (str, default="partial"): How to handle rows that fail after all retries. `"partial"` returns results with failed rows marked; `"strict"` raises an error on any failure.
-- `max_workers` (int, default=None): Maximum parallel workers for API calls. `None` auto-selects.
-- `auto_download` (bool, default=False): Automatically download missing Ollama models without prompting.
-- `progress_callback` (callable, optional): Callback function for progress updates. Called as `progress_callback(current_step, total_steps)`.
-- `pdf_dpi` (int, default=150): DPI resolution for rendering PDF pages as images. Higher values improve quality but increase processing time and cost.
-- `thinking_budget` (int, default=0): Token budget for model reasoning/thinking. Set to 0 to disable. Behavior varies by provider:
-
-| Provider | `thinking_budget=0` | `thinking_budget > 0` (e.g., 8192) |
-|----------|---------------------|--------------------------------------|
-| **OpenAI** | `reasoning_effort="minimal"` | `reasoning_effort="high"` |
-| **Anthropic** | Thinking disabled | Extended thinking enabled (min 1024 tokens, forces temperature=1) |
-| **Google** | Thinking disabled | `thinkingConfig: {thinkingBudget: N}` (min 128 tokens) |
-| **HuggingFace** | Thinking disabled (or use non-thinking model variant) | Thinking enabled (or use thinking model variant) |
-
-> **Note:** Mistral and xAI models do not have reasoning/thinking toggles — `thinking_budget` has no effect on these providers. For Qwen3 on HuggingFace, reasoning is controlled by choosing the model variant: use `Qwen3-VL-235B-A22B-Thinking` for reasoning or `Qwen3-VL-235B-A22B-Instruct` for standard mode with `thinking_budget=0`.
-
-**Returns:**
-- `pandas.DataFrame`: Classification results with category columns
-
-**Examples:**
+Assign predefined categories to text, images, or PDFs. Supports single-model and multi-model ensemble classification with consensus voting.
 
 ```python
-import catllm as cat
-
-# Text classification (auto-detected)
-results = cat.classify(
-    input_data=df['responses'],
-    categories=["Positive feedback", "Negative feedback", "Neutral"],
-    description="Customer satisfaction survey",
-    api_key=api_key
-)
-
-# Image classification (auto-detected from file paths)
-results = cat.classify(
-    input_data="/path/to/images/",
-    categories=["Contains person", "Outdoor scene", "Has text"],
-    description="Product photos",
-    api_key=api_key
-)
-
-# PDF classification (auto-detected, processes each page separately)
-results = cat.classify(
-    input_data="/path/to/reports/",
-    categories=["Contains table", "Has chart", "Is summary page"],
-    description="Financial reports",
-    mode="both",  # Use both image and extracted text
-    api_key=api_key
-)
-
-# Single-label classification (pick one best category per response)
-results = cat.classify(
-    input_data=df['responses'],
-    categories=["Positive", "Negative", "Neutral"],
-    multi_label=False,
-    api_key=api_key
-)
-
-# Multi-model ensemble for higher accuracy
-results = cat.classify(
-    input_data=df['responses'],
-    categories=["Positive", "Negative", "Neutral"],
-    models=[
-        ("gpt-4o", "openai", "sk-..."),
-        ("claude-sonnet-4-20250514", "anthropic", "sk-ant-..."),
-        ("gemini-2.5-flash", "google", "AIza..."),
-    ],
-    consensus_threshold="unanimous",
+cat.classify(
+    input_data=df["text"],
+    categories=["Cat A", "Cat B", "Cat C"],
+    models=[("gpt-4o", "openai", key1), ("claude-sonnet-4-20250514", "anthropic", key2)],
+    output_file="results.csv"
 )
 ```
-
-**Multi-Model Ensemble:**
-
-When you provide the `models` parameter, CatLLM runs classification across multiple models and combines results using majority voting. This can significantly improve accuracy by reducing individual model biases. By default, cloud models run in parallel while local models (Ollama) run sequentially — controlled by the `parallel` parameter.
-
-The output includes:
-- Individual model predictions (e.g., `category_1_gpt_4o`, `category_1_claude`)
-- Consensus columns (e.g., `category_1_consensus`)
-- Agreement scores showing how many models agreed
-
----
 
 ### `extract()`
-
-Unified category extraction function for text, image, and PDF inputs. Automatically discovers categories in your data when you don't have a predefined scheme.
-
-> **Planned improvement:** Allow specifying a separate, more powerful model for the semantic merge step (e.g., use GPT-4o-mini for bulk extraction, GPT-4o for the final consolidation). This "tiered" approach could improve merge quality without significantly increasing cost.
-
-**Parameters:**
-- `input_data`: The data to explore (text list, image paths, or PDF paths)
-- `api_key` (str): API key for the LLM service
-- `input_type` (str, default="text"): Type of input - "text", "image", or "pdf"
-- `survey_question` (str, default=""): The survey question or description of the data. Provides context for category discovery.
-- `description` (str, optional): Deprecated alias for `survey_question`. Use `survey_question` instead.
-- `max_categories` (int, default=12): Maximum number of final categories to return
-- `categories_per_chunk` (int, default=10): Categories to extract per chunk
-- `divisions` (int, default=12): Number of chunks to divide data into
-- `iterations` (int, default=8): Number of extraction passes over the data
-- `user_model` (str, default="gpt-4o"): Model to use
-- `model_source` (str, default="auto"): Provider - "auto", "openai", "anthropic", "google", etc.
-- `creativity` (float, optional): Temperature setting (0.0-1.0). `None` uses model default.
-- `specificity` (str, default="broad"): "broad" or "specific" category granularity
-- `research_question` (str, optional): Research context to guide extraction
-- `focus` (str, optional): Focus instruction for category extraction (e.g., "emotional responses")
-- `mode` (str, default="text"): Processing mode for non-text inputs - "text", "image", or "both"
-- `filename` (str, optional): Output filename for CSV
-- `random_state` (int, optional): Random seed for reproducibility of chunk sampling
-- `chunk_delay` (float, default=0.0): Seconds to wait between processing each chunk. Useful for rate-limited APIs.
-- `auto_download` (bool, default=False): Automatically download missing Ollama models without prompting.
-- `progress_callback` (callable, optional): Callback function for progress updates.
-
-> **Default parameter rationale:** The defaults of `divisions=12` and `iterations=8` were determined through empirical analysis. We ran a 6x6 grid search over [1, 4, 8, 12, 16, 20] for both parameters, repeating each combination 10 times and measuring pairwise Jaro-Winkler consistency across runs. Consistency peaked at 12 divisions and 8 iterations, with values beyond this point offering no meaningful improvement.
-
-**Returns:**
-- `dict` with keys:
-  - `counts_df`: DataFrame of categories with counts
-  - `top_categories`: List of top category names
-  - `raw_top_text`: Raw model output
-
-**Example:**
+Discover categories from a corpus using LLM-driven exploration.
 
 ```python
-import catllm as cat
-
-# Extract categories from survey responses
-results = cat.extract(
-    input_data=df['responses'],
-    survey_question="Why did you move?",
-    api_key=api_key,
-    max_categories=10,
-    focus="decisions to relocate"  # Optional focus
+cat.extract(
+    input_data=df["text"],
+    survey_question="What is this text about?",
+    models=[("gpt-4o", "openai", key)],
 )
-
-print(results['top_categories'])
-# ['Employment opportunity', 'Family reasons', 'Cost of living', ...]
 ```
-
----
 
 ### `explore()`
-
-Raw category extraction for frequency and saturation analysis. Unlike `extract()`, which normalizes, deduplicates, and semantically merges categories into a clean final set, `explore()` returns **every category string from every chunk across every iteration** — with duplicates intact.
-
-This is useful for analyzing which categories are robust (consistently discovered across runs) versus which are noise (appearing only once or twice). By increasing iterations, you can build saturation curves showing when category discovery converges.
-
-**Parameters:**
-- `input_data`: List of text responses or pandas Series
-- `api_key` (str): API key for the LLM service
-- `description` (str): The survey question or description of the data
-- `max_categories` (int, default=12): Maximum categories passed through to the extraction prompt.
-- `categories_per_chunk` (int, default=10): Categories to extract per chunk
-- `divisions` (int, default=12): Number of chunks to divide data into
-- `user_model` (str, default="gpt-4o"): Model to use
-- `model_source` (str, default="auto"): Provider - "auto", "openai", "anthropic", "google", etc.
-- `creativity` (float, optional): Temperature setting (0.0-1.0). `None` uses model default.
-- `specificity` (str, default="broad"): "broad" or "specific" category granularity
-- `research_question` (str, optional): Research context to guide extraction
-- `focus` (str, optional): Focus instruction (e.g., "decisions to relocate")
-- `iterations` (int, default=8): Number of passes over the data
-- `random_state` (int, optional): Random seed for reproducibility
-- `filename` (str, optional): Output CSV filename (one category per row)
-- `chunk_delay` (float, default=0.0): Seconds to wait between processing each chunk. Useful for rate-limited APIs.
-- `auto_download` (bool, default=False): Automatically download missing Ollama models without prompting.
-- `progress_callback` (callable, optional): Callback function for progress updates.
-
-**Returns:**
-- `list[str]`: Every category extracted from every chunk across every iteration. Length ≈ `iterations × divisions × categories_per_chunk`.
-
-**Example:**
+Raw category extraction for saturation analysis.
 
 ```python
-import catllm as cat
-
-# Run extraction with many iterations for saturation analysis
-raw_categories = cat.explore(
-    input_data=df['responses'],
-    description="Why did you move?",
-    api_key=api_key,
-    iterations=20,
-    divisions=5,
-    categories_per_chunk=10,
+cat.explore(
+    input_data=df["text"],
+    description="Describe the main themes",
+    models=[("gpt-4o", "openai", key)],
 )
-
-# Count how often each category appears across runs
-from collections import Counter
-counts = Counter(raw_categories)
-for category, freq in counts.most_common(15):
-    print(f"{freq:3d}x  {category}")
 ```
-
----
 
 ### `summarize()`
-
-Unified summarization function for text and PDF inputs. Generates concise summaries of survey responses, documents, or any text data. **Input type is auto-detected** from your data.
-
-Supports both **single-model** and **multi-model ensemble** summarization. In multi-model mode, summaries from all models are synthesized into a consensus summary.
-
-**Parameters:**
-- `input_data`: The data to summarize. Can be:
-  - Text: list of strings, pandas Series, or single string
-  - PDF: directory path, single PDF path, or list of PDF paths
-- `api_key` (str): API key for the LLM service (single-model mode)
-- `description` (str): Description of what the content contains (provides context)
-- `instructions` (str): Specific summarization instructions (e.g., "bullet points")
-- `max_length` (int): Maximum summary length in words
-- `focus` (str): What to focus on (e.g., "main arguments", "emotional content")
-- `user_model` (str, default="gpt-4o"): Model to use
-- `model_source` (str, default="auto"): Provider - "auto", "openai", "anthropic", "google", etc.
-- `creativity` (float, optional): Temperature setting (0.0-1.0). `None` uses model default.
-- `thinking_budget` (int, default=0): Token budget for extended thinking/reasoning. See `classify()` for provider-specific behavior.
-- `chain_of_thought` (bool, default=True): Enable step-by-step reasoning. On by default for summarization.
-- `context_prompt` (bool, default=False): Add expert analyst role to the prompt.
-- `step_back_prompt` (bool, default=False): Ask the model to consider broader context before summarizing.
-- `mode` (str, default="image"): PDF processing mode:
-  - "image": Render pages as images (best for visual documents)
-  - "text": Extract text only (faster, good for text-heavy PDFs)
-  - "both": Send both image and extracted text (most comprehensive)
-- `filename` (str): Output CSV filename
-- `save_directory` (str): Directory to save results
-- `pdf_dpi` (int, default=150): DPI resolution for rendering PDF pages as images.
-- `models` (list): For multi-model mode, list of `(model, provider, api_key)` tuples
-- `parallel` (bool, default=None): Controls concurrent vs sequential model execution. `None` auto-detects (sequential for Ollama, parallel for cloud).
-- `max_workers` (int, default=None): Maximum parallel workers for API calls.
-- `auto_download` (bool, default=False): Automatically download missing Ollama models without prompting.
-- `progress_callback` (callable, optional): Callback function for progress updates.
-- `safety` (bool, default=False): If True, saves progress to CSV after each item. Requires `filename`.
-- `max_retries` (int, default=5): Max retries per API call.
-- `batch_retries` (int, default=2): Number of batch retry passes for failed items.
-- `retry_delay` (float, default=1.0): Delay between retries in seconds.
-- `row_delay` (float, default=0.0): Delay in seconds between processing each row. Useful to avoid rate limits.
-- `fail_strategy` (str, default="partial"): How to handle failures — `"partial"` keeps successful results, `"strict"` blanks the row if any model fails.
-- `batch_mode` (bool, default=False): If True, use async batch API (50% cost savings). Supported providers: openai, anthropic, google, mistral, xai. Not compatible with PDF input.
-- `batch_poll_interval` (float, default=30): Seconds between batch job status checks.
-- `batch_timeout` (float, default=86400): Max seconds to wait for batch completion (default 24h).
-
-**Returns:**
-- `pandas.DataFrame`: Results with summary columns:
-  - `survey_input`: Original text or page label (for PDFs)
-  - `summary`: Generated summary (or consensus for multi-model)
-  - `processing_status`: "success", "error", "skipped"
-  - `pdf_path`: Path to source PDF (PDF mode only)
-  - `page_index`: Page number, 0-indexed (PDF mode only)
-
-**Examples:**
+Summarize text or PDF documents, with optional multi-model ensemble.
 
 ```python
-import catllm as cat
-
-# Single model text summarization
-results = cat.summarize(
-    input_data=df['responses'],
-    description="Customer feedback",
-    api_key=api_key
-)
-
-# PDF summarization (auto-detected from file paths)
-results = cat.summarize(
-    input_data="/path/to/pdfs/",
-    description="Research papers",
-    mode="image",
-    api_key=api_key
-)
-
-# PDF summarization with specific files and focus
-results = cat.summarize(
-    input_data=["doc1.pdf", "doc2.pdf"],
-    description="Financial reports",
-    mode="both",
-    focus="key metrics and trends",
-    max_length=100,
-    api_key=api_key
-)
-
-# With safety saves and row delay
-results = cat.summarize(
-    input_data=df['responses'],
-    description="Customer feedback",
-    api_key=api_key,
-    safety=True,
-    filename="results.csv",
-    row_delay=1.0,
-)
-
-# Batch mode (50% cost savings)
-results = cat.summarize(
-    input_data=df['responses'],
-    description="Customer feedback",
-    api_key=api_key,
-    batch_mode=True,
-    filename="batch_results.csv",
-)
-
-# Multi-model with synthesis
-results = cat.summarize(
-    input_data=df['responses'],
-    models=[
-        ("gpt-4o", "openai", "sk-..."),
-        ("claude-sonnet-4-20250514", "anthropic", "sk-ant-..."),
-    ],
+cat.summarize(
+    input_data=df["text"],
+    models=[("gpt-4o", "openai", key)],
+    output_file="summaries.csv"
 )
 ```
 
----
+## Supported Providers
 
-### `image_score_drawing()`
+OpenAI, Anthropic, Google (Gemini), Mistral, Perplexity, xAI (Grok), HuggingFace, Ollama (local models).
 
-Performs quality scoring of images against a reference description and optional reference image, returning structured results with optional CSV export.
+All providers use the same `(model_name, provider, api_key)` tuple format. Provider is auto-detected from model name if omitted.
 
-**Methodology:**
-Processes each image individually, assigning a drawing quality score on a 5-point scale based on similarity to the expected description:
+## Features
 
-- **1**: No meaningful similarity (fundamentally different)
-- **2**: Barely recognizable similarity (25% match)
-- **3**: Partial match (50% key features)
-- **4**: Strong alignment (75% features)
-- **5**: Near-perfect match (90%+ similarity)
-
-**Parameters:**
-- `reference_image_description` (str): A description of what the model should expect to see
-- `image_input` (list): List of image file paths or folder path containing images
-- `reference_image` (str): A file path to the reference image
-- `api_key` (str): API key for the LLM service
-- `user_model` (str, default="gpt-4o"): Specific vision model to use
-- `creativity` (float, default=0): Temperature/randomness setting (0.0-1.0)
-- `safety` (bool, default=False): Enable safety checks and save results at each API call step
-- `filename` (str, default="image_scores.csv"): Filename for CSV output
-- `save_directory` (str, optional): Directory path to save the CSV file
-- `model_source` (str, default="OpenAI"): Model provider
-
-**Returns:**
-- `pandas.DataFrame`: DataFrame with image paths, quality scores, and analysis details
-
-**Example:**
-
-```python
-import catllm as cat
-
-image_scores = cat.image_score_drawing(
-    reference_image_description='A hand-drawn circle',
-    image_input=['image1.jpg', 'image2.jpg', 'image3.jpg'],
-    user_model="gpt-4o",
-    api_key="OPENAI_API_KEY"
-)
-```
-
----
-
-### `image_features()`
-
-Extracts specific features and attributes from images, returning exact answers to user-defined questions (e.g., counts, colors, presence of objects).
-
-**Methodology:**
-Processes each image individually using vision models to extract precise information about specified features. Unlike scoring and classification functions, this returns factual data such as object counts, color identification, or presence/absence of specific elements.
-
-**Parameters:**
-- `image_description` (str): A description of what the model should expect to see
-- `image_input` (list): List of image file paths or folder path containing images
-- `features_to_extract` (list): List of specific features to extract (e.g., ["number of people", "primary color", "contains text"])
-- `api_key` (str): API key for the LLM service
-- `user_model` (str, default="gpt-4o"): Specific vision model to use
-- `creativity` (float, default=0): Temperature/randomness setting (0.0-1.0)
-- `to_csv` (bool, default=False): Whether to save the output to a CSV file
-- `safety` (bool, default=False): Enable safety checks and save results at each API call step
-- `filename` (str, default="categorized_data.csv"): Filename for CSV output
-- `save_directory` (str, optional): Directory path to save the CSV file
-- `model_source` (str, default="OpenAI"): Model provider
-
-**Returns:**
-- `pandas.DataFrame`: DataFrame with image paths and extracted feature values
-
-**Example:**
-
-```python
-import catllm as cat
-
-features = cat.image_features(
-    image_description='Product photos from e-commerce site',
-    features_to_extract=['number of items', 'primary color', 'has price tag'],
-    image_input='/path/to/images/',
-    user_model="gpt-4o",
-    api_key="OPENAI_API_KEY"
-)
-```
-
----
-
-### `cerad_drawn_score()`
-
-Automatically scores drawings of circles, diamonds, overlapping rectangles, and cubes according to the official Consortium to Establish a Registry for Alzheimer's Disease (CERAD) scoring system.
-
-**Methodology:**
-Processes each image individually, evaluating the drawn shapes based on CERAD criteria. Works even with images that contain other drawings or writing.
-
-**Parameters:**
-- `shape` (str): The type of shape to score ("circle", "diamond", "rectangles", "cube")
-- `image_input` (list): List of image file paths or folder path containing images
-- `api_key` (str): API key for the LLM service
-- `user_model` (str, default="gpt-4o"): Specific model to use
-- `creativity` (float, default=0): Temperature/randomness setting (0.0-1.0)
-- `safety` (bool, default=False): Enable safety checks and save results at each API call step
-- `filename` (str, optional): Filename for CSV output
-- `model_source` (str, default="auto"): Model provider
-
-**Returns:**
-- `pandas.DataFrame`: DataFrame with image paths, CERAD scores, and analysis details
-
-**Example:**
-
-```python
-import catllm as cat
-
-diamond_scores = cat.cerad_drawn_score(
-    shape="diamond",
-    image_input=df['diamond_pic_path'],
-    api_key=api_key,
-    safety=True,
-    filename="diamond_scores.csv",
-)
-```
-
----
-
-## Deprecated Functions
-
-The following functions are deprecated and will be removed in a future version. Please use `classify()` instead, which auto-detects input type and supports all the same features.
-
-| Deprecated Function | Replacement |
-|---------------------|-------------|
-| `multi_class()` | `classify(input_data=texts, ...)` |
-| `image_multi_class()` | `classify(input_data=images, ...)` |
-| `pdf_multi_class()` | `classify(input_data=pdfs, ...)` |
-| `explore_corpus()` | `extract(input_data=texts, ...)` |
-| `explore_common_categories()` | `extract(input_data=texts, ...)` |
-
-These functions still work but will show deprecation warnings. Migration is straightforward—simply use `classify()` with your data and it will automatically detect whether you're passing text, images, or PDFs.
-
----
-
-## Related Projects
-
-**Looking for web research capabilities?** Check out [llm-web-research](https://github.com/chrissoria/llm-web-research) - a precision-focused LLM-powered web research tool that uses a novel Funnel of Verification (FoVe) methodology to reduce false positives. It's designed for use cases where accuracy matters more than completeness.
-
-```bash
-pip install llm-web-research
-```
-
-## Academic Research
-
-This package implements methodology from research on LLM performance in social science applications, including the UC Berkeley Social Networks Study. The package addresses reproducibility challenges in LLM-assisted research by providing standardized interfaces and consistent output formatting.
-
-If you use this package for research, please cite:
-
-Soria, C. (2025). CatLLM (0.1.0). Zenodo. https://doi.org/10.5281/zenodo.15532317
-
-## Contributing & Support
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
-
-- **Report bugs or request features**: [Open a GitHub Issue](https://github.com/chrissoria/cat-llm/issues)
-- **Ask questions or get help**: [GitHub Discussions](https://github.com/chrissoria/cat-llm/discussions) or [Issues](https://github.com/chrissoria/cat-llm/issues)
-- **Contribute code**: Fork the repo, create a branch, and submit a pull request — see [CONTRIBUTING.md](CONTRIBUTING.md)
-- **Research collaboration**: Email [ChrisSoria@Berkeley.edu](mailto:ChrisSoria@Berkeley.edu)
+- **Multi-model ensemble** with consensus voting and agreement scores
+- **Batch API support** for OpenAI, Anthropic, Google, Mistral, and xAI
+- **Prompt strategies**: Chain-of-Thought, Chain-of-Verification, step-back prompting, few-shot examples
+- **Text, image, and PDF** input auto-detection
+- **Embedding similarity** tiebreaker for ensemble consensus ties
 
 ## License
 
-`cat-llm` is distributed under the terms of the [GNU](https://www.gnu.org/licenses/gpl-3.0.en.html) license.
+GPL-3.0-or-later
