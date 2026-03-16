@@ -5,6 +5,7 @@ Provides URL detection, HTML text extraction, and batch URL fetching
 for use as a preprocessing step before text classification/extraction/summarization.
 """
 
+import html as html_lib
 import re
 
 import requests
@@ -78,10 +79,11 @@ def detect_url_input(items) -> bool:
 
 def strip_html_tags(html: str) -> str:
     """
-    Remove HTML tags and clean up whitespace from an HTML string.
+    Extract readable text from an HTML string.
 
-    Strips ``<script>`` and ``<style>`` blocks, removes all remaining tags,
-    collapses whitespace, and decodes common HTML entities.
+    Removes non-content elements (navigation, headers, footers, sidebars,
+    forms, scripts, styles), strips remaining tags, collapses whitespace,
+    and decodes HTML entities.
 
     Args:
         html: Raw HTML string.
@@ -89,28 +91,31 @@ def strip_html_tags(html: str) -> str:
     Returns:
         Plain-text string.
     """
-    # Remove script and style elements entirely
-    text = re.sub(
-        r"<(script|style)[^>]*>.*?</\1>",
-        "",
-        html,
-        flags=re.DOTALL | re.IGNORECASE,
+    text = html
+
+    # Remove non-content element blocks entirely
+    _JUNK_TAGS = (
+        "script", "style", "nav", "header", "footer", "aside",
+        "noscript", "iframe", "form", "svg",
     )
-    # Remove HTML tags
+    for tag in _JUNK_TAGS:
+        text = re.sub(
+            rf"<{tag}[^>]*>.*?</{tag}>",
+            "",
+            text,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+
+    # Remove void / self-closing non-content tags
+    for tag in ("input", "meta", "link", "img"):
+        text = re.sub(rf"<{tag}[^>]*/?\s*>", "", text, flags=re.IGNORECASE)
+
+    # Strip remaining HTML tags
     text = re.sub(r"<[^>]+>", " ", text)
     # Collapse whitespace
     text = re.sub(r"\s+", " ", text).strip()
-    # Decode common HTML entities
-    entity_map = {
-        "&amp;": "&",
-        "&lt;": "<",
-        "&gt;": ">",
-        "&quot;": '"',
-        "&#39;": "'",
-        "&nbsp;": " ",
-    }
-    for entity, char in entity_map.items():
-        text = text.replace(entity, char)
+    # Decode all HTML entities (&#91; &#39; &amp; etc.)
+    text = html_lib.unescape(text)
     return text
 
 
