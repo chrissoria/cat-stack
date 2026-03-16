@@ -328,7 +328,7 @@ Please be more careful to output EXACTLY {num_categories} categories numbered 1 
 
 def explore_corpus(
     survey_question,
-    survey_input,
+    input_data,
     api_key: str = None,
     research_question=None,
     specificity="broad",
@@ -347,7 +347,7 @@ def explore_corpus(
 
     Args:
         survey_question: The survey question being analyzed
-        survey_input: Series or list of text responses
+        input_data: Series or list of text responses
         api_key: API key for the LLM provider
         research_question: Optional research context
         specificity: "broad" or "specific" categories
@@ -379,13 +379,13 @@ def explore_corpus(
     print()
 
     # Input normalization
-    if not isinstance(survey_input, pd.Series):
-        survey_input = pd.Series(survey_input)
-    survey_input = survey_input.dropna()
+    if not isinstance(input_data, pd.Series):
+        input_data = pd.Series(input_data)
+    input_data = input_data.dropna()
 
-    n = len(survey_input)
+    n = len(input_data)
     if n == 0:
-        raise ValueError("survey_input is empty after dropping NA.")
+        raise ValueError("input_data is empty after dropping NA.")
 
     # Auto-adjust divisions for small datasets
     original_divisions = divisions
@@ -416,7 +416,7 @@ def explore_corpus(
     # Sample chunks
     random_chunks = []
     for i in range(divisions):
-        chunk = survey_input.sample(n=chunk_size).tolist()
+        chunk = input_data.sample(n=chunk_size).tolist()
         random_chunks.append(chunk)
 
     responses = []
@@ -485,7 +485,7 @@ def explore_corpus(
 
 
 def explore_common_categories(
-    survey_input,
+    input_data,
     api_key: str = None,
     survey_question: str = "",
     max_categories: int = 12,
@@ -514,7 +514,7 @@ def explore_common_categories(
     Uses raw HTTP requests via UnifiedLLMClient - supports all providers.
 
     Args:
-        survey_input: Series or list of text responses
+        input_data: Series or list of text responses
         api_key: API key for the LLM provider
         survey_question: The survey question being analyzed
         max_categories: Maximum number of top categories to return
@@ -623,12 +623,12 @@ def explore_common_categories(
                 print()
 
     # Input normalization
-    if not isinstance(survey_input, pd.Series):
-        survey_input = pd.Series(survey_input)
-    survey_input = survey_input.dropna().astype("string")
-    n = len(survey_input)
+    if not isinstance(input_data, pd.Series):
+        input_data = pd.Series(input_data)
+    input_data = input_data.dropna().astype("string")
+    n = len(input_data)
     if n == 0:
-        raise ValueError("survey_input is empty after dropping NA.")
+        raise ValueError("input_data is empty after dropping NA.")
 
     # Auto-adjust divisions for small datasets
     original_divisions = divisions
@@ -688,7 +688,7 @@ def explore_common_categories(
         random_chunks = []
         for _ in range(divisions):
             seed = int(rng.integers(0, 2**32 - 1))
-            chunk = survey_input.sample(n=chunk_size, random_state=seed).tolist()
+            chunk = input_data.sample(n=chunk_size, random_state=seed).tolist()
             random_chunks.append(chunk)
 
         for i in tqdm(range(divisions), desc=f"Processing chunks (pass {pass_idx+1}/{iterations})"):
@@ -834,7 +834,7 @@ Output:
 # =============================================================================
 
 def multi_class(
-    survey_input,
+    input_data,
     categories,
     api_key: str = None,
     model: str = "gpt-4o",
@@ -870,7 +870,7 @@ def multi_class(
     step-back prompting, and context prompting.
 
     Args:
-        survey_input: List or Series of text responses to classify
+        input_data: List or Series of text responses to classify
         categories: List of category names, or "auto" to auto-detect categories
         api_key: API key for the LLM provider (not required for Ollama)
         model: Model name (e.g., "gpt-4o", "claude-sonnet-4-5-20250929", "gemini-2.5-flash",
@@ -900,7 +900,7 @@ def multi_class(
 
     Example with Ollama (local):
         results = multi_class(
-            survey_input=["I moved for work"],
+            input_data=["I moved for work"],
             categories=["Employment", "Family"],
             model="llama3.2",
             provider="ollama",
@@ -908,7 +908,7 @@ def multi_class(
 
     Example with cloud provider:
         results = multi_class(
-            survey_input=["I moved for work"],
+            input_data=["I moved for work"],
             categories=["Employment", "Family"],
             api_key="your-api-key",
             model="gpt-4o",
@@ -916,7 +916,7 @@ def multi_class(
 
     Example with chain-of-verification:
         results = multi_class(
-            survey_input=["I moved for work"],
+            input_data=["I moved for work"],
             categories=["Employment", "Family"],
             api_key="your-api-key",
             model="gpt-4o",
@@ -948,7 +948,7 @@ def multi_class(
 
         categories = explore_common_categories(
             survey_question=survey_question,
-            survey_input=survey_input,
+            input_data=input_data,
             research_question=research_question,
             api_key=api_key,
             model_source=provider,
@@ -1221,7 +1221,7 @@ Provide the final corrected categorization in the same JSON format:"""
     if use_two_step:
         print("Using two-step classification for Ollama (classify -> format JSON)")
 
-    for idx, response in enumerate(tqdm(survey_input, desc="Classifying responses")):
+    for idx, response in enumerate(tqdm(input_data, desc="Classifying responses")):
         if pd.isna(response):
             results.append(("Skipped NaN", "Skipped NaN input"))
             extracted_jsons.append('{"1":"e"}')
@@ -1282,7 +1282,7 @@ Provide the final corrected categorization in the same JSON format:"""
             if normalized_partial:
                 normalized_df = pd.concat(normalized_partial, ignore_index=True)
                 partial_df = pd.DataFrame({
-                    'survey_input': pd.Series(survey_input[:len(results)]).reset_index(drop=True),
+                    'input_data': pd.Series(input_data[:len(results)]).reset_index(drop=True),
                     'model_response': [r[0] for r in results],
                     'error': [r[1] for r in results],
                     'json': pd.Series(extracted_jsons).reset_index(drop=True),
@@ -1310,7 +1310,7 @@ Provide the final corrected categorization in the same JSON format:"""
 
     # Create main DataFrame
     df = pd.DataFrame({
-        'survey_input': pd.Series(survey_input).reset_index(drop=True),
+        'input_data': pd.Series(input_data).reset_index(drop=True),
         'model_response': [r[0] for r in results],
         'error': [r[1] for r in results],
         'json': pd.Series(extracted_jsons).reset_index(drop=True),

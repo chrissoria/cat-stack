@@ -154,8 +154,8 @@ def apply_embedding_scores(df, categories, embedding_model, category_description
         DataFrame with `_similarity` columns inserted.
     """
     # Find the text column to use for embedding
-    if "survey_input" in df.columns:
-        texts = df["survey_input"].tolist()
+    if "input_data" in df.columns:
+        texts = df["input_data"].tolist()
     else:
         # Fallback: use first column
         texts = df.iloc[:, 0].tolist()

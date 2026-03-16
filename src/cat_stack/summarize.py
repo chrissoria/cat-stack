@@ -115,7 +115,7 @@ def summarize(
 
     Returns:
         pd.DataFrame: Results with summary column(s):
-            - survey_input: Original text or page label (for PDFs)
+            - input_data: Original text or page label (for PDFs)
             - summary: Generated summary (or consensus for multi-model)
             - summary_<model>: Per-model summaries (multi-model only)
             - processing_status: "success", "error", "skipped"
@@ -259,7 +259,7 @@ def summarize(
         )
 
     return summarize_ensemble(
-        survey_input=input_data,
+        input_data=input_data,
         api_key=api_key,
         input_description=description,
         summary_instructions=instructions,

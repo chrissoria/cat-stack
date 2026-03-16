@@ -637,7 +637,7 @@ def classify(
         return _maybe_apply_embeddings(result)
 
     result = classify_ensemble(
-        survey_input=input_data,
+        input_data=input_data,
         categories=categories,
         models=models,
         input_description=description,

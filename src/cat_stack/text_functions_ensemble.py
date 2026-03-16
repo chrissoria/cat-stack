@@ -177,7 +177,7 @@ _IMAGE_EXTENSIONS = {
 }
 
 
-def _detect_input_type(survey_input) -> str:
+def _detect_input_type(input_data) -> str:
     """
     Detect if input is text strings, PDF files, or image files.
 
@@ -188,14 +188,14 @@ def _detect_input_type(survey_input) -> str:
     - Otherwise → Text mode
 
     Args:
-        survey_input: Text strings, PDF paths, image paths, or directory path
+        input_data: Text strings, PDF paths, image paths, or directory path
 
     Returns:
         'text', 'pdf', or 'image'
     """
     # Handle single string input
-    if isinstance(survey_input, (str, Path)):
-        survey_str = str(survey_input)
+    if isinstance(input_data, (str, Path)):
+        survey_str = str(input_data)
         ext = os.path.splitext(survey_str)[1].lower()
 
         # Check for PDF
@@ -224,8 +224,8 @@ def _detect_input_type(survey_input) -> str:
         return 'text'
 
     # Handle list/series input
-    if hasattr(survey_input, '__iter__'):
-        for item in survey_input:
+    if hasattr(input_data, '__iter__'):
+        for item in input_data:
             if item is not None and not pd.isna(item):
                 item_str = str(item)
                 ext = os.path.splitext(item_str)[1].lower()
@@ -1650,7 +1650,7 @@ def _save_partial_results(
             status = "success"
 
         row = {
-            "survey_input": result["response"],
+            "input_data": result["response"],
             "processing_status": status,
             "failed_models": ",".join(result["aggregated"]["failed_models"]) if result["aggregated"]["failed_models"] else "",
         }
@@ -1712,7 +1712,7 @@ def _save_partial_results(
 
 
 def classify_ensemble(
-    survey_input,
+    input_data,
     categories,
     # Single model mode (like original multi_class)
     model: str = None,
@@ -1752,7 +1752,7 @@ def classify_ensemble(
     categories_per_chunk: int = 10,
     divisions: int = 10,
     research_question: str = None,
-    # PDF-specific parameters (only used when survey_input contains PDFs)
+    # PDF-specific parameters (only used when input_data contains PDFs)
     pdf_mode: str = "image",
     pdf_dpi: int = 150,
     input_description: str = "",
@@ -1773,8 +1773,8 @@ def classify_ensemble(
     This unified function auto-detects whether the input is text or PDF and processes accordingly.
 
     Input type detection:
-    - If survey_input is a directory path -> PDF mode
-    - If survey_input contains .pdf file paths -> PDF mode
+    - If input_data is a directory path -> PDF mode
+    - If input_data contains .pdf file paths -> PDF mode
     - Otherwise -> Text mode
 
     This function can work in multiple modes:
@@ -1783,7 +1783,7 @@ def classify_ensemble(
     3. PDF mode: Classify PDF pages instead of text responses
 
     Args:
-        survey_input: Text responses OR PDF paths (auto-detected)
+        input_data: Text responses OR PDF paths (auto-detected)
             - Text mode: List or Series of text strings to classify
             - PDF mode: Directory path, single PDF path, or list of PDF paths
 
@@ -1840,7 +1840,7 @@ def classify_ensemble(
         divisions: Number of chunks to divide data into (default 10)
         research_question: Optional research context for category discovery
 
-        # PDF-specific parameters (only used when survey_input contains PDFs):
+        # PDF-specific parameters (only used when input_data contains PDFs):
         pdf_mode: How to process PDF pages. Options:
             - "image": Render pages as images (best for visual elements)
             - "text": Extract text only (faster/cheaper for text-heavy docs)
@@ -1859,7 +1859,7 @@ def classify_ensemble(
             - "<model_name>": Individual DataFrame for each model
 
         DataFrame columns:
-        - survey_input: Text string OR page label (e.g., "document_p1")
+        - input_data: Text string OR page label (e.g., "document_p1")
         - category_N_<model>: Per-model results (0/1)
         - category_N_consensus: Majority vote result
         - category_N_agreement: Model agreement score
@@ -1873,7 +1873,7 @@ def classify_ensemble(
     Examples:
         # TEXT MODE - Single model (returns DataFrame directly):
         df = multi_class_ensemble(
-            survey_input=["I moved for a new job"],
+            input_data=["I moved for a new job"],
             categories=["Employment", "Family", "Housing"],
             model="gpt-4o",
             api_key="sk-...",
@@ -1882,7 +1882,7 @@ def classify_ensemble(
 
         # TEXT MODE - Ensemble with multiple models (returns dict):
         results = multi_class_ensemble(
-            survey_input=["I moved for a new job"],
+            input_data=["I moved for a new job"],
             categories=["Employment", "Family", "Housing"],
             models=[
                 ("gpt-4o", "openai", "sk-..."),
@@ -1894,7 +1894,7 @@ def classify_ensemble(
 
         # PDF MODE - Single model (auto-detected from .pdf paths):
         df = multi_class_ensemble(
-            survey_input="reports/",  # Directory of PDFs
+            input_data="reports/",  # Directory of PDFs
             categories=["Has Chart", "Has Table", "Financial Summary"],
             model="gpt-4o",
             api_key="sk-...",
@@ -1904,7 +1904,7 @@ def classify_ensemble(
 
         # PDF MODE - Ensemble with native PDF support:
         results = multi_class_ensemble(
-            survey_input=["doc1.pdf", "doc2.pdf"],
+            input_data=["doc1.pdf", "doc2.pdf"],
             categories=["Diagnosis", "Treatment Plan"],
             models=[
                 ("gpt-4o", "openai", "sk-..."),
@@ -1929,7 +1929,7 @@ def classify_ensemble(
         from .main import extract
 
         # Detect input type to choose the right extraction path
-        detected_type = _detect_input_type(survey_input)
+        detected_type = _detect_input_type(input_data)
 
         if detected_type == "text" and survey_question == "":
             raise TypeError(
@@ -1944,7 +1944,7 @@ def classify_ensemble(
 
         print(f"Auto-detecting categories using {first_model} (input type: {detected_type})...")
         auto_result = extract(
-            input_data=survey_input,
+            input_data=input_data,
             api_key=first_api_key,
             input_type=detected_type,
             description=survey_question or input_description,
@@ -1974,7 +1974,7 @@ def classify_ensemble(
     # =============================================================================
     # DETECT INPUT TYPE: Text vs PDF vs Image
     # =============================================================================
-    input_type = _detect_input_type(survey_input)
+    input_type = _detect_input_type(input_data)
     print(f"\nInput type detected: {input_type.upper()}")
 
     # Initialize processing variables
@@ -1993,7 +1993,7 @@ def classify_ensemble(
         print(f"Loading images...")
 
         # Load image files
-        image_files = _load_image_files(survey_input)
+        image_files = _load_image_files(input_data)
 
         if not image_files:
             raise ValueError("No images found in the provided input.")
@@ -2018,7 +2018,7 @@ def classify_ensemble(
         print(f"PDF processing mode: {pdf_mode}")
 
         # Load PDF files
-        pdf_files = _load_pdf_files(survey_input)
+        pdf_files = _load_pdf_files(input_data)
 
         # Extract all pages from all PDFs
         all_pages = []
@@ -2036,9 +2036,9 @@ def classify_ensemble(
 
     else:
         # =================================================================
-        # TEXT MODE: survey_input is the items to process
+        # TEXT MODE: input_data is the items to process
         # =================================================================
-        items_to_process = survey_input
+        items_to_process = input_data
 
     # Auto-resolve parallel mode: sequential for all-local (Ollama), parallel otherwise
     if parallel is None:
@@ -2824,7 +2824,7 @@ def build_output_dataframes(
 
     # Initialize data structures
     combined_data = {
-        "survey_input": [],
+        "input_data": [],
         "processing_status": [],
         "failed_models": [],
     }
@@ -2860,7 +2860,7 @@ def build_output_dataframes(
 
     # Populate data
     for result in all_results:
-        combined_data["survey_input"].append(result["response"])
+        combined_data["input_data"].append(result["response"])
         aggregated = result["aggregated"]
 
         # Add PDF metadata if present
@@ -2938,7 +2938,7 @@ def build_output_dataframes(
         combined_df[col] = pd.to_numeric(combined_df[col], errors='coerce').astype('Int64')
 
     # Create consensus-only DataFrame
-    consensus_cols = ["survey_input", "processing_status", "failed_models"]
+    consensus_cols = ["input_data", "processing_status", "failed_models"]
     # Add PDF columns if present
     if has_pdf_metadata:
         consensus_cols += ["pdf_path", "page_index"]
@@ -2955,7 +2955,7 @@ def build_output_dataframes(
     }
 
     for model_name in model_names:
-        model_cols = ["survey_input", "processing_status"]
+        model_cols = ["input_data", "processing_status"]
         # Add PDF columns if present
         if has_pdf_metadata:
             model_cols += ["pdf_path", "page_index"]
@@ -3019,16 +3019,16 @@ def _save_partial_summarize_results(all_results, model_configs, model_names, is_
     """Save partial summarization results to CSV for safety/incremental saves."""
     rows = []
     for entry in all_results:
-        item = entry["survey_input"]
+        item = entry["input_data"]
         if is_pdf_mode and isinstance(item, tuple) and len(item) == 3:
             pdf_path, page_index, page_label = item
             row = {
-                "survey_input": page_label,
+                "input_data": page_label,
                 "pdf_path": pdf_path,
                 "page_index": page_index,
             }
         else:
-            row = {"survey_input": item}
+            row = {"input_data": item}
 
         for model_name, json_str in entry["model_results"].items():
             is_valid, summary_text = extract_summary_from_json(json_str)
@@ -3058,7 +3058,7 @@ def _save_partial_summarize_results(all_results, model_configs, model_names, is_
 # =============================================================================
 
 def summarize_ensemble(
-    survey_input,
+    input_data,
     api_key: str = None,
     input_description: str = "",
     summary_instructions: str = "",
@@ -3096,7 +3096,7 @@ def summarize_ensemble(
     summary using an LLM. Input type is auto-detected from the data.
 
     Args:
-        survey_input: Data to summarize. Can be:
+        input_data: Data to summarize. Can be:
             - Text: list of strings, pandas Series, or single string
             - PDF: directory path, single PDF path, or list of PDF paths
         api_key: API key for single-model mode
@@ -3132,7 +3132,7 @@ def summarize_ensemble(
 
     Returns:
         DataFrame with columns:
-        - survey_input: Original text or page label (for PDFs)
+        - input_data: Original text or page label (for PDFs)
         - summary: Generated summary (or consensus summary for multi-model)
         - summary_<model>: Per-model summaries (multi-model only)
         - processing_status: "success", "error", "skipped"
@@ -3172,7 +3172,7 @@ def summarize_ensemble(
         raise TypeError("filename is required when using safety=True.")
 
     # Detect input type: Text vs PDF
-    input_type = _detect_input_type(survey_input)
+    input_type = _detect_input_type(input_data)
     is_pdf_mode = (input_type == 'pdf')
 
     if is_pdf_mode:
@@ -3185,7 +3185,7 @@ def summarize_ensemble(
         print(f"PDF processing mode: {pdf_mode}")
 
         # Load PDF files
-        pdf_files = _load_pdf_files(survey_input)
+        pdf_files = _load_pdf_files(input_data)
 
         # Extract all pages from all PDFs
         all_pages = []
@@ -3201,14 +3201,14 @@ def summarize_ensemble(
     else:
         # TEXT MODE: Normalize input to list
         print(f"\nInput type detected: TEXT")
-        if isinstance(survey_input, str):
-            survey_input = [survey_input]
-        elif hasattr(survey_input, 'tolist'):
-            survey_input = survey_input.tolist()
+        if isinstance(input_data, str):
+            input_data = [input_data]
+        elif hasattr(input_data, 'tolist'):
+            input_data = input_data.tolist()
         else:
-            survey_input = list(survey_input)
+            input_data = list(input_data)
 
-        items_to_process = survey_input
+        items_to_process = input_data
         print(f"Total texts to summarize: {len(items_to_process)}")
 
     # Normalize model input to list of tuples
@@ -3425,7 +3425,7 @@ def summarize_ensemble(
         # Store results for this item
         result_entry = {
             "idx": idx,
-            "survey_input": item,
+            "input_data": item,
             "model_results": item_results,
             "errors": item_errors,
         }
@@ -3484,17 +3484,17 @@ def summarize_ensemble(
     rows = []
     for entry in all_results:
         # Handle PDF mode: extract metadata from tuple
-        item = entry["survey_input"]
+        item = entry["input_data"]
         if is_pdf_mode and isinstance(item, tuple) and len(item) == 3:
             pdf_path, page_index, page_label = item
             row = {
-                "survey_input": page_label,
+                "input_data": page_label,
                 "pdf_path": pdf_path,
                 "page_index": page_index,
             }
             original_text_for_synthesis = page_label  # Use page label for synthesis context
         else:
-            row = {"survey_input": item}
+            row = {"input_data": item}
             original_text_for_synthesis = item
 
         # Extract summaries from each model

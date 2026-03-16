@@ -82,7 +82,7 @@ def explore(
         >>> print(raw_categories[:5])
     """
     raw_items = explore_common_categories(
-        survey_input=input_data,
+        input_data=input_data,
         api_key=api_key,
         survey_question=description,
         max_categories=max_categories,

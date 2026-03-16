@@ -147,7 +147,7 @@ def extract(
 
     if input_type == "text":
         return explore_common_categories(
-            survey_input=input_data,
+            input_data=input_data,
             api_key=api_key,
             survey_question=resolved_survey_question,
             max_categories=max_categories,

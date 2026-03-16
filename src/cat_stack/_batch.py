@@ -1209,7 +1209,7 @@ def run_batch_summarize(
     """
     Run batch summarization for a single model.
 
-    Returns a DataFrame with survey_input, summary, processing_status columns.
+    Returns a DataFrame with input_data, summary, processing_status columns.
     """
     import math
     import pandas as pd
@@ -1231,22 +1231,22 @@ def run_batch_summarize(
         is_skipped = item is None or (isinstance(item, float) and math.isnan(item))
 
         if is_skipped:
-            rows.append({"survey_input": text, "summary": "", "processing_status": "skipped"})
+            rows.append({"input_data": text, "summary": "", "processing_status": "skipped"})
             continue
 
         if error:
-            rows.append({"survey_input": text, "summary": "", "processing_status": "error"})
+            rows.append({"input_data": text, "summary": "", "processing_status": "error"})
             continue
 
         if fail_strategy == "strict" and error:
-            rows.append({"survey_input": text, "summary": "", "processing_status": "error"})
+            rows.append({"input_data": text, "summary": "", "processing_status": "error"})
             continue
 
         is_valid, summary_text = extract_summary_from_json(json_str)
         if is_valid and summary_text:
-            rows.append({"survey_input": text, "summary": summary_text, "processing_status": "success"})
+            rows.append({"input_data": text, "summary": summary_text, "processing_status": "success"})
         else:
-            rows.append({"survey_input": text, "summary": "", "processing_status": "error"})
+            rows.append({"input_data": text, "summary": "", "processing_status": "error"})
 
     df = pd.DataFrame(rows)
 
@@ -1321,7 +1321,7 @@ def run_batch_ensemble_summarize(
         is_skipped = item is None or (isinstance(item, float) and math.isnan(item))
 
         if is_skipped:
-            row = {"survey_input": text, "summary": "", "processing_status": "skipped"}
+            row = {"input_data": text, "summary": "", "processing_status": "skipped"}
             for mn in model_names:
                 row[f"summary_{mn}"] = ""
             row["failed_models"] = ""
@@ -1346,7 +1346,7 @@ def run_batch_ensemble_summarize(
         if fail_strategy == "strict" and errors:
             summaries = {k: "" for k in summaries}
 
-        row = {"survey_input": text}
+        row = {"input_data": text}
         for mn in model_names:
             row[f"summary_{mn}"] = summaries.get(mn, "")
 
