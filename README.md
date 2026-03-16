@@ -28,6 +28,7 @@ pip install cat-stack[formatter]   # JSON formatter fallback model
 | **cat-survey** | Survey response classification |
 | **cat-vader** | Social media text (Reddit, Twitter/X) |
 | **cat-ademic** | Academic papers, PDFs, citations |
+| **cat-cog** | Cognitive assessment & visual scoring (CERAD) |
 | **cat-pol** | Political text (manifestos, speeches, legislation) |
 
 Installing `cat-llm` pulls in all of the above.
@@ -42,7 +43,7 @@ result = cat.classify(
     input_data=df["text_column"],
     categories=["Positive", "Negative", "Neutral"],
     models=[("gpt-4o", "openai", OPENAI_KEY)],
-    output_file="classified.csv"
+    filename="classified.csv"
 )
 ```
 
@@ -56,7 +57,7 @@ cat.classify(
     input_data=df["text"],
     categories=["Cat A", "Cat B", "Cat C"],
     models=[("gpt-4o", "openai", key1), ("claude-sonnet-4-20250514", "anthropic", key2)],
-    output_file="results.csv"
+    filename="results.csv"
 )
 ```
 
@@ -89,7 +90,7 @@ Summarize text or PDF documents, with optional multi-model ensemble.
 cat.summarize(
     input_data=df["text"],
     models=[("gpt-4o", "openai", key)],
-    output_file="summaries.csv"
+    filename="summaries.csv"
 )
 ```
 
