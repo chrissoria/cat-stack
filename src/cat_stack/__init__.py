@@ -24,6 +24,9 @@ from .summarize import summarize
 # Category analysis
 from ._category_analysis import has_other_category, check_category_verbosity
 
+# Web fetching utilities
+from ._web_fetch import is_url, fetch_url_text, fetch_urls, detect_url_input, strip_html_tags
+
 # =============================================================================
 # Provider utilities (for advanced users)
 # =============================================================================
@@ -101,6 +104,12 @@ __all__ = [
     "check_ollama_model",
     "pull_ollama_model",
     "PROVIDER_CONFIG",
+    # Web fetching utilities
+    "is_url",
+    "fetch_url_text",
+    "fetch_urls",
+    "detect_url_input",
+    "strip_html_tags",
     # Deprecated (backward compatibility)
     "explore_common_categories",
     "explore_corpus",
