@@ -36,6 +36,7 @@ def prompt_tune(
     max_retries: int = 5,
     input_mode: str = None,
     ui: str = "browser",
+    optimize: str = "balanced",
 ):
     """
     Automatically optimize the classification prompt using user feedback.
@@ -64,6 +65,10 @@ def prompt_tune(
         input_mode (str): Input mode override. Default None (auto-detect).
         ui (str): Review interface for corrections. "browser" (default) opens
             a local web page with checkboxes. "terminal" uses text-based input.
+        optimize (str): Which metric to maximize across iterations.
+            "balanced" (default) — average of accuracy, sensitivity, precision.
+            "precision" — optimize for precision (minimize false positives).
+            "sensitivity" — optimize for sensitivity (minimize false negatives).
 
     Returns:
         dict with keys:
@@ -71,7 +76,7 @@ def prompt_tune(
             - "iterations": list of dicts, each with:
                 - "iteration": int
                 - "system_prompt": str — the prompt used
-                - "score": float — cell-level accuracy (0-1)
+                - "metrics": dict with "accuracy", "sensitivity", "precision"
                 - "total_flips": int — total corrections made
             - "best_iteration": int — which iteration produced the best prompt
 
@@ -124,14 +129,27 @@ def prompt_tune(
     if meta_source == "auto":
         meta_source = detect_provider(meta_model)
 
+    # Resolve optimization target to a scoring function
+    _optimize_fns = {
+        "balanced": lambda m: (m["accuracy"] + m["sensitivity"] + m["precision"]) / 3,
+        "precision": lambda m: m["precision"],
+        "sensitivity": lambda m: m["sensitivity"],
+    }
+    if optimize not in _optimize_fns:
+        raise ValueError(
+            f"optimize must be 'balanced', 'precision', or 'sensitivity', got '{optimize}'"
+        )
+    _target_fn = _optimize_fns[optimize]
+
     iterations = []
     current_prompt = ""
     best_prompt = ""
-    best_score = -1.0
+    best_target = -1.0
     best_iteration = 0
 
     print(f"\n{'=' * 60}")
     print(f"PROMPT TUNING — up to {max_iterations} iteration(s), {sample_size} sample(s) each")
+    print(f"  Optimizing for: {optimize}")
     print(f"{'=' * 60}")
 
     for iteration in range(1, max_iterations + 1):
@@ -163,26 +181,27 @@ def prompt_tune(
             break
 
         corrections = result["corrections"]
-        score = result["score"]
+        metrics = result["metrics"]
         total_flips = result["total_flips"]
+        target_score = _target_fn(metrics)
 
         # Print iteration summary
-        score_pct = score * 100
-
         print(f"\n  Iteration {iteration} results:")
-        print(f"    Score: {score_pct:.1f}%")
-        print(f"    Total corrections:  {total_flips}")
+        print(f"    Accuracy:    {metrics['accuracy'] * 100:.1f}%")
+        print(f"    Sensitivity: {metrics['sensitivity'] * 100:.1f}%")
+        print(f"    Precision:   {metrics['precision'] * 100:.1f}%")
+        print(f"    Corrections: {total_flips}")
 
         iterations.append({
             "iteration": iteration,
             "system_prompt": current_prompt,
-            "score": score,
+            "metrics": metrics,
             "total_flips": total_flips,
         })
 
         # Track best
-        if score > best_score:
-            best_score = score
+        if target_score > best_target:
+            best_target = target_score
             best_prompt = current_prompt
             best_iteration = iteration
 
@@ -222,7 +241,8 @@ def prompt_tune(
     print(f"PROMPT TUNING COMPLETE")
     print(f"  Iterations run:  {len(iterations)}")
     print(f"  Best iteration:  {best_iteration}")
-    print(f"  Best score:      {best_score * 100:.1f}%")
+    print(f"  Optimized for:   {optimize}")
+    print(f"  Best target:     {best_target * 100:.1f}%")
     if best_prompt:
         print(f"  Optimized prompt:")
         for line in best_prompt.split("\n"):

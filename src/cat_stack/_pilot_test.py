@@ -10,6 +10,47 @@ Provides two capabilities:
 import random
 
 
+def compute_metrics(corrections):
+    """
+    Compute cell-level accuracy, sensitivity, and precision from corrections.
+
+    Each (item, category) pair is a cell. The model's original output is the
+    prediction; the user's corrected output is ground truth.
+
+    - TP: model=1, truth=1  (correctly identified)
+    - FP: model=1, truth=0  (false alarm — user flipped 1→0)
+    - FN: model=0, truth=1  (missed — user flipped 0→1)
+    - TN: model=0, truth=0  (correctly excluded)
+
+    Returns:
+        dict with "accuracy", "sensitivity", "precision" (each 0-1 float).
+        When a denominator is zero (e.g. no positives), that metric is 1.0.
+    """
+    tp = fp = fn = tn = 0
+    for c in corrections:
+        for cat, orig_val in c["original"].items():
+            truth_val = c["corrected"][cat]
+            if orig_val == 1 and truth_val == 1:
+                tp += 1
+            elif orig_val == 1 and truth_val == 0:
+                fp += 1
+            elif orig_val == 0 and truth_val == 1:
+                fn += 1
+            else:
+                tn += 1
+
+    total = tp + fp + fn + tn
+    accuracy = (tp + tn) / total if total > 0 else 1.0
+    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 1.0
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 1.0
+
+    return {
+        "accuracy": accuracy,
+        "sensitivity": sensitivity,
+        "precision": precision,
+    }
+
+
 def collect_corrections(
     input_data,
     categories,
@@ -44,9 +85,9 @@ def collect_corrections(
                 - "original": dict — {category_name: 0/1} as model classified
                 - "corrected": dict — {category_name: 0/1} after user corrections
                 - "changed": list of str — category names that were flipped
-            - "score": float — fraction of individual (item, category) cells
-              that matched the user's corrections (0-1). 1.0 means every
-              single cell was correct.
+            - "metrics": dict with "accuracy", "sensitivity", "precision"
+              (each 0-1 float), computed cell-wise across all (item, category)
+              pairs.
             - "total_flips": int — total number of category-level corrections
             - "sample_indices": list of int indices that were sampled
         Returns None if user cancels.
@@ -63,7 +104,8 @@ def collect_corrections(
     if n_total == 0:
         print("[CatLLM] No items to test.")
         return {
-            "corrections": [], "score": 1.0,
+            "corrections": [],
+            "metrics": {"accuracy": 1.0, "sensitivity": 1.0, "precision": 1.0},
             "total_flips": 0, "sample_indices": [],
         }
 
@@ -128,14 +170,12 @@ def collect_corrections(
     if corrections is None:
         return None
 
-    # Compute score: fraction of (item, category) cells that were correct
     total_flips = sum(len(c["changed"]) for c in corrections)
-    total_cells = len(corrections) * len(categories)
-    score = (total_cells - total_flips) / total_cells if total_cells > 0 else 1.0
+    metrics = compute_metrics(corrections)
 
     return {
         "corrections": corrections,
-        "score": score,
+        "metrics": metrics,
         "total_flips": total_flips,
         "sample_indices": sample_indices,
     }
@@ -254,25 +294,25 @@ def run_pilot_test(
         return None
 
     # Print summary
-    n_total = len(result["corrections"])
-    n_cats = len(result["corrections"][0]["original"]) if result["corrections"] else 0
-    total_cells = n_total * n_cats
-    score_pct = result["score"] * 100
+    m = result["metrics"]
 
     print(f"{'=' * 60}")
     print(f"PILOT TEST SUMMARY")
-    print(f"  Score: {score_pct:.1f}%  ({total_cells - result['total_flips']}/{total_cells} cells correct)")
+    print(f"  Accuracy:    {m['accuracy'] * 100:.1f}%")
+    print(f"  Sensitivity: {m['sensitivity'] * 100:.1f}%")
+    print(f"  Precision:   {m['precision'] * 100:.1f}%")
     print(f"  Corrections: {result['total_flips']}")
     print(f"{'=' * 60}\n")
 
-    if result["score"] < 0.7:
+    avg = (m["accuracy"] + m["sensitivity"] + m["precision"]) / 3
+    if avg < 0.7:
         print(
-            "  WARNING: Score is below 70%.\n"
+            "  WARNING: Average score is below 70%.\n"
             "  Consider revising your categories — adding descriptions and examples\n"
             "  significantly improves accuracy. You can also use prompt_tune() to\n"
             "  automatically optimize the classification prompt.\n"
         )
-    elif result["score"] < 0.9:
+    elif avg < 0.9:
         print(
             "  Some classifications needed corrections. Consider using prompt_tune()\n"
             "  to optimize the prompt before running the full classification.\n"
