@@ -44,9 +44,9 @@ def collect_corrections(
                 - "original": dict — {category_name: 0/1} as model classified
                 - "corrected": dict — {category_name: 0/1} after user corrections
                 - "changed": list of str — category names that were flipped
-            - "accuracy": float — fraction of items with zero corrections (0-1)
-            - "category_accuracy": float — fraction of individual category
-              decisions that were correct (0-1)
+            - "score": float — fraction of individual (item, category) cells
+              that matched the user's corrections (0-1). 1.0 means every
+              single cell was correct.
             - "total_flips": int — total number of category-level corrections
             - "sample_indices": list of int indices that were sampled
         Returns None if user cancels.
@@ -63,7 +63,7 @@ def collect_corrections(
     if n_total == 0:
         print("[CatLLM] No items to test.")
         return {
-            "corrections": [], "accuracy": 1.0, "category_accuracy": 1.0,
+            "corrections": [], "score": 1.0,
             "total_flips": 0, "sample_indices": [],
         }
 
@@ -128,18 +128,14 @@ def collect_corrections(
     if corrections is None:
         return None
 
-    # Compute stats
-    n_total_fb = len(corrections)
-    n_perfect = sum(1 for c in corrections if not c["changed"])
+    # Compute score: fraction of (item, category) cells that were correct
     total_flips = sum(len(c["changed"]) for c in corrections)
-    total_decisions = n_total_fb * len(categories)
-    accuracy = n_perfect / n_total_fb if n_total_fb > 0 else 0.0
-    cat_accuracy = (total_decisions - total_flips) / total_decisions if total_decisions > 0 else 1.0
+    total_cells = len(corrections) * len(categories)
+    score = (total_cells - total_flips) / total_cells if total_cells > 0 else 1.0
 
     return {
         "corrections": corrections,
-        "accuracy": accuracy,
-        "category_accuracy": cat_accuracy,
+        "score": score,
         "total_flips": total_flips,
         "sample_indices": sample_indices,
     }
@@ -259,26 +255,24 @@ def run_pilot_test(
 
     # Print summary
     n_total = len(result["corrections"])
-    n_perfect = sum(1 for c in result["corrections"] if not c["changed"])
-    n_corrected = n_total - n_perfect
-    pct = result["accuracy"] * 100
-    cat_pct = result["category_accuracy"] * 100
+    n_cats = len(result["corrections"][0]["original"]) if result["corrections"] else 0
+    total_cells = n_total * n_cats
+    score_pct = result["score"] * 100
 
     print(f"{'=' * 60}")
     print(f"PILOT TEST SUMMARY")
-    print(f"  Items fully correct:     {n_perfect}/{n_total} ({pct:.0f}%)")
-    print(f"  Items with corrections:  {n_corrected}/{n_total}")
-    print(f"  Category-level accuracy: {cat_pct:.1f}%")
+    print(f"  Score: {score_pct:.1f}%  ({total_cells - result['total_flips']}/{total_cells} cells correct)")
+    print(f"  Corrections: {result['total_flips']}")
     print(f"{'=' * 60}\n")
 
-    if result["accuracy"] < 0.5:
+    if result["score"] < 0.7:
         print(
-            "  WARNING: Less than half of the pilot classifications were fully correct.\n"
+            "  WARNING: Score is below 70%.\n"
             "  Consider revising your categories — adding descriptions and examples\n"
             "  significantly improves accuracy. You can also use prompt_tune() to\n"
             "  automatically optimize the classification prompt.\n"
         )
-    elif result["accuracy"] < 0.8:
+    elif result["score"] < 0.9:
         print(
             "  Some classifications needed corrections. Consider using prompt_tune()\n"
             "  to optimize the prompt before running the full classification.\n"

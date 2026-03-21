@@ -71,8 +71,7 @@ def prompt_tune(
             - "iterations": list of dicts, each with:
                 - "iteration": int
                 - "system_prompt": str — the prompt used
-                - "accuracy": float — item-level accuracy (0-1)
-                - "category_accuracy": float — category-level accuracy (0-1)
+                - "score": float — cell-level accuracy (0-1)
                 - "total_flips": int — total corrections made
             - "best_iteration": int — which iteration produced the best prompt
 
@@ -128,7 +127,7 @@ def prompt_tune(
     iterations = []
     current_prompt = ""
     best_prompt = ""
-    best_cat_accuracy = -1.0
+    best_score = -1.0
     best_iteration = 0
 
     print(f"\n{'=' * 60}")
@@ -164,31 +163,26 @@ def prompt_tune(
             break
 
         corrections = result["corrections"]
-        accuracy = result["accuracy"]
-        cat_accuracy = result["category_accuracy"]
+        score = result["score"]
         total_flips = result["total_flips"]
 
         # Print iteration summary
-        n_total = len(corrections)
-        n_perfect = sum(1 for c in corrections if not c["changed"])
-        cat_pct = cat_accuracy * 100
+        score_pct = score * 100
 
         print(f"\n  Iteration {iteration} results:")
-        print(f"    Items fully correct:     {n_perfect}/{n_total}")
-        print(f"    Category-level accuracy: {cat_pct:.1f}%")
-        print(f"    Total corrections:       {total_flips}")
+        print(f"    Score: {score_pct:.1f}%")
+        print(f"    Total corrections:  {total_flips}")
 
         iterations.append({
             "iteration": iteration,
             "system_prompt": current_prompt,
-            "accuracy": accuracy,
-            "category_accuracy": cat_accuracy,
+            "score": score,
             "total_flips": total_flips,
         })
 
         # Track best
-        if cat_accuracy > best_cat_accuracy:
-            best_cat_accuracy = cat_accuracy
+        if score > best_score:
+            best_score = score
             best_prompt = current_prompt
             best_iteration = iteration
 
@@ -228,7 +222,7 @@ def prompt_tune(
     print(f"PROMPT TUNING COMPLETE")
     print(f"  Iterations run:  {len(iterations)}")
     print(f"  Best iteration:  {best_iteration}")
-    print(f"  Best accuracy:   {best_cat_accuracy * 100:.1f}% (category-level)")
+    print(f"  Best score:      {best_score * 100:.1f}%")
     if best_prompt:
         print(f"  Optimized prompt:")
         for line in best_prompt.split("\n"):
