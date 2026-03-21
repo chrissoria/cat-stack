@@ -2072,6 +2072,8 @@ def classify_ensemble(
     # New input_mode / input_type parameters
     input_mode: str = None,
     input_type: str = "auto",
+    # Pilot test correction examples
+    correction_examples: str = "",
 ):
     """
     Multi-class classification with support for text AND PDF inputs, single or multiple LLM models.
@@ -2409,6 +2411,13 @@ def classify_ensemble(
     examples_text = "\n".join(
         f"Example {i}: {ex}" for i, ex in enumerate(examples, 1) if ex is not None
     )
+
+    # Append pilot test correction examples if provided
+    if correction_examples:
+        if examples_text:
+            examples_text = examples_text + "\n\n" + correction_examples
+        else:
+            examples_text = correction_examples
 
     survey_question_context = f"Context: {survey_question}." if survey_question else ""
 

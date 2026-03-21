@@ -2,7 +2,8 @@
 Pilot test module for CatLLM.
 
 Runs classification on a small random sample and asks the user to validate
-results before committing to the full (potentially expensive) classification run.
+results at the category level before committing to the full classification run.
+User corrections are formatted as few-shot examples to fine-tune the prompt.
 """
 
 import random
@@ -17,11 +18,11 @@ def run_pilot_test(
     sample_size=10,
 ):
     """
-    Run a pilot classification on a random sample and collect user feedback.
+    Run a pilot classification on a random sample and collect category-level feedback.
 
-    Classifies a small random subset, displays the results, and asks the user
-    to mark each as correct or incorrect. Returns a summary so the caller can
-    decide whether to proceed.
+    Classifies a small random subset, displays each item with its per-category
+    assignments, and lets the user correct individual categories by number.
+    Corrections are formatted as prompt examples for the full run.
 
     Args:
         input_data: The full input data (list or Series).
@@ -34,8 +35,13 @@ def run_pilot_test(
     Returns:
         dict with keys:
             - "proceed": bool — True if user chose to continue
-            - "accuracy": float — fraction marked correct (0-1)
-            - "feedback": list of dicts with "input", "classifications", "correct"
+            - "accuracy": float — fraction of items with zero corrections (0-1)
+            - "corrections": list of dicts, each with:
+                - "input": str — the input text
+                - "original": dict — {category_name: 0/1} as model classified
+                - "corrected": dict — {category_name: 0/1} after user corrections
+                - "changed": list of str — category names that were flipped
+            - "correction_examples": str — formatted text to inject into prompts
             - "sample_indices": list of int indices that were sampled
         Returns None if user cancels before completing feedback.
     """
@@ -50,7 +56,10 @@ def run_pilot_test(
     n_total = len(items_list)
     if n_total == 0:
         print("[CatLLM] No items to pilot test.")
-        return {"proceed": True, "accuracy": 1.0, "feedback": [], "sample_indices": []}
+        return {
+            "proceed": True, "accuracy": 1.0, "corrections": [],
+            "correction_examples": "", "sample_indices": [],
+        }
 
     # Sample
     actual_sample_size = min(sample_size, n_total)
@@ -62,7 +71,6 @@ def run_pilot_test(
 
     # Run classification on the sample
     pilot_kwargs = dict(ensemble_kwargs)
-    # Override settings for pilot: no file saving, no progress callback
     pilot_kwargs["filename"] = None
     pilot_kwargs["save_directory"] = None
     pilot_kwargs["progress_callback"] = None
@@ -75,16 +83,17 @@ def run_pilot_test(
     except Exception as e:
         print(f"\n[CatLLM] Pilot test classification failed: {e}")
         print("  Skipping pilot test and proceeding with full classification.\n")
-        return {"proceed": True, "accuracy": 0.0, "feedback": [], "sample_indices": sample_indices}
+        return {
+            "proceed": True, "accuracy": 0.0, "corrections": [],
+            "correction_examples": "", "sample_indices": sample_indices,
+        }
 
-    # Extract classifications from the result DataFrame
-    # Category columns are named like "category_name" with values 0/1,
-    # or for ensemble they may be "category_name_consensus"
-    feedback = []
     is_multi_model = len(models) > 1
+    corrections = []
 
     print(f"\n{'=' * 60}")
-    print("PILOT TEST RESULTS — Please review each classification")
+    print("PILOT TEST RESULTS — Review each classification")
+    print("Enter category numbers to flip (e.g. '1,3'), or press Enter if correct.")
     print(f"{'=' * 60}\n")
 
     for row_idx in range(len(pilot_result)):
@@ -99,31 +108,37 @@ def run_pilot_test(
         print(f"--- Item {row_idx + 1}/{actual_sample_size} ---")
         print(f"  Input: {display_text}\n")
 
-        # Find which categories were assigned (value = 1)
-        # Columns are numbered: category_1, category_2, ... (single model)
-        # or category_1_consensus, category_2_consensus, ... (multi-model)
-        assigned = []
+        # Read per-category values
+        # Columns: category_1, category_2, ... (single) or category_1_consensus, ... (multi)
+        cat_values = {}
         for cat_idx, cat in enumerate(categories, 1):
             if is_multi_model:
                 col = f"category_{cat_idx}_consensus"
             else:
                 col = f"category_{cat_idx}"
 
+            val = 0
             if col in pilot_result.columns:
-                val = row[col]
-                if val is not None and str(val) == "1":
-                    assigned.append(cat)
+                raw = row[col]
+                if raw is not None and str(raw) == "1":
+                    val = 1
+            cat_values[cat] = val
 
-        if assigned:
-            print(f"  Classified as: {', '.join(assigned)}")
-        else:
-            print("  Classified as: (none)")
-
+        # Display each category with its assignment
+        print("  Categories:")
+        for cat_idx, cat in enumerate(categories, 1):
+            val = cat_values[cat]
+            marker = "1" if val else "0"
+            # Truncate long category names for display
+            cat_display = cat if len(cat) <= 60 else cat[:57] + "..."
+            print(f"    {cat_idx}. {cat_display:<60s} = {marker}")
         print()
 
-        # Ask for feedback
+        # Ask for corrections
         try:
-            answer = input("  Is this correct? (Y/n/q to quit): ").strip().lower()
+            answer = input(
+                "  Numbers to flip (e.g. '1,3'), Enter if correct, 'q' to quit: "
+            ).strip().lower()
         except (EOFError, KeyboardInterrupt):
             print("\n\n[CatLLM] Pilot test cancelled.")
             return None
@@ -132,27 +147,66 @@ def run_pilot_test(
             print("\n[CatLLM] Pilot test cancelled by user.")
             return None
 
-        is_correct = answer in ("", "y", "yes")
-        feedback.append({
+        # Parse which categories to flip
+        original = dict(cat_values)
+        corrected = dict(cat_values)
+        changed = []
+
+        if answer:
+            try:
+                nums = [int(x.strip()) for x in answer.split(",") if x.strip()]
+            except ValueError:
+                print("  (Could not parse input — treating as no corrections)\n")
+                nums = []
+
+            for num in nums:
+                if 1 <= num <= len(categories):
+                    cat_name = categories[num - 1]
+                    corrected[cat_name] = 1 - corrected[cat_name]
+                    changed.append(cat_name)
+                else:
+                    print(f"  (Ignoring invalid number: {num})")
+
+            if changed:
+                print(f"  Flipped: {', '.join(changed)}")
+
+        corrections.append({
             "input": input_text,
-            "classifications": assigned,
-            "correct": is_correct,
+            "original": original,
+            "corrected": corrected,
+            "changed": changed,
         })
         print()
 
-    # Summarize
-    n_correct = sum(1 for f in feedback if f["correct"])
-    n_total_fb = len(feedback)
-    accuracy = n_correct / n_total_fb if n_total_fb > 0 else 0.0
+    # Build summary
+    n_perfect = sum(1 for c in corrections if not c["changed"])
+    n_with_corrections = sum(1 for c in corrections if c["changed"])
+    n_total_fb = len(corrections)
+    accuracy = n_perfect / n_total_fb if n_total_fb > 0 else 0.0
     pct = accuracy * 100
 
+    # Count total category-level flips
+    total_flips = sum(len(c["changed"]) for c in corrections)
+    total_decisions = n_total_fb * len(categories)
+    cat_accuracy = (total_decisions - total_flips) / total_decisions * 100 if total_decisions > 0 else 100.0
+
     print(f"{'=' * 60}")
-    print(f"PILOT TEST SUMMARY: {n_correct}/{n_total_fb} correct ({pct:.0f}%)")
+    print(f"PILOT TEST SUMMARY")
+    print(f"  Items fully correct:    {n_perfect}/{n_total_fb} ({pct:.0f}%)")
+    print(f"  Items with corrections: {n_with_corrections}/{n_total_fb}")
+    print(f"  Category-level accuracy: {cat_accuracy:.1f}% ({total_decisions - total_flips}/{total_decisions})")
     print(f"{'=' * 60}\n")
+
+    # Build correction examples for prompt injection
+    correction_examples = _build_correction_examples(corrections, categories)
+
+    if n_with_corrections > 0:
+        print(f"  {n_with_corrections} correction(s) will be used as examples to guide")
+        print("  the full classification run.\n")
 
     if accuracy < 0.5:
         print(
-            "  WARNING: Less than half of the pilot classifications were marked correct.\n"
+            "  WARNING: Less than half of the pilot classifications were fully correct.\n"
             "  Consider revising your categories — adding descriptions and examples\n"
             "  significantly improves accuracy. For example:\n"
             "\n"
@@ -162,8 +216,8 @@ def run_pilot_test(
         )
     elif accuracy < 0.8:
         print(
-            "  Some classifications were incorrect. You may want to refine your\n"
-            "  category definitions before running the full classification.\n"
+            "  Some classifications needed corrections. Your corrections will be\n"
+            "  used to improve the full run.\n"
         )
     else:
         print("  Classifications look good!\n")
@@ -175,7 +229,10 @@ def run_pilot_test(
         ).strip().lower()
     except (EOFError, KeyboardInterrupt):
         print("\n[CatLLM] Classification cancelled.")
-        return {"proceed": False, "accuracy": accuracy, "feedback": feedback, "sample_indices": sample_indices}
+        return {
+            "proceed": False, "accuracy": accuracy, "corrections": corrections,
+            "correction_examples": correction_examples, "sample_indices": sample_indices,
+        }
 
     proceed = proceed_answer in ("", "y", "yes")
 
@@ -187,6 +244,62 @@ def run_pilot_test(
     return {
         "proceed": proceed,
         "accuracy": accuracy,
-        "feedback": feedback,
+        "corrections": corrections,
+        "correction_examples": correction_examples,
         "sample_indices": sample_indices,
     }
+
+
+def _build_correction_examples(corrections, categories):
+    """
+    Format user corrections as few-shot examples for prompt injection.
+
+    Includes both corrected items (to fix mistakes) and a sample of items
+    the model got fully correct (to reinforce good behavior).
+
+    Args:
+        corrections: List of correction dicts from pilot test.
+        categories: List of category names.
+
+    Returns:
+        str: Formatted correction examples text, or "" if no corrections.
+    """
+    # Separate corrected items from fully-correct items
+    corrected_items = [c for c in corrections if c["changed"]]
+    correct_items = [c for c in corrections if not c["changed"]]
+
+    if not corrected_items:
+        return ""
+
+    lines = [
+        "The following are reference examples based on prior review. "
+        "Use these to calibrate your classifications:"
+    ]
+
+    # Include all corrected items as examples
+    for item in corrected_items:
+        input_text = str(item["input"])
+        if len(input_text) > 300:
+            input_text = input_text[:300] + "..."
+
+        lines.append(f'\nText: "{input_text}"')
+        lines.append("Correct classification:")
+        for cat_idx, cat in enumerate(categories, 1):
+            val = item["corrected"].get(cat, 0)
+            lines.append(f"  {cat_idx}. {cat} = {val}")
+
+    # Include up to 3 correct items as positive reinforcement
+    if correct_items:
+        sample_correct = correct_items[:3]
+        for item in sample_correct:
+            input_text = str(item["input"])
+            if len(input_text) > 300:
+                input_text = input_text[:300] + "..."
+
+            lines.append(f'\nText: "{input_text}"')
+            lines.append("Correct classification:")
+            for cat_idx, cat in enumerate(categories, 1):
+                val = item["corrected"].get(cat, 0)
+                lines.append(f"  {cat_idx}. {cat} = {val}")
+
+    return "\n".join(lines)
