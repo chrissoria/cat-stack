@@ -5,6 +5,31 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-03-20
+
+### Added
+- **`input_mode` parameter** on `classify()`, `summarize()`, and `extract()`: Separates _what you want the model to do_ from _what file type to process_. Two modes:
+  - `"text"` — classify/summarize text content, regardless of source format. For images and scanned PDFs, uses LLM-based OCR to extract text first.
+  - `"visual"` — classify/summarize visual features of images or rendered PDF pages.
+  - `None` (default) — auto-select based on file type, preserving all existing behavior.
+- **`input_type` parameter** on `classify()`, `summarize()`, and `extract()`: Explicit file type filter for directories/mixed input. Options: `"auto"` (default, auto-detect from extensions), `"pdf"`, `"image"`, `"docx"`, `"text"`.
+- **LLM-based OCR** (`_ocr_extract_text()` in `text_functions_ensemble.py`): When `input_mode="text"` is used with image or PDF input, a multimodal LLM extracts visible text from the document before classification/summarization. OCR is performed once per item and shared across all ensemble models.
+  - For PDFs: tries PyMuPDF text extraction first; if the page has no extractable text (scanned/image PDF), falls back to rendering the page as an image and OCR-ing it via LLM. Prints `[CatStack] Page has no extractable text. Using LLM-based OCR.`
+  - For images: sends the image to the LLM with an OCR prompt.
+  - Uses the first multimodal-capable model in the ensemble (skips text-only providers like Ollama).
+  - Not supported with `batch_mode=True` (raises `ValueError`).
+- **`_resolve_input_params()` internal function**: Resolves `input_mode`, `input_type`, and the legacy `mode` parameter into a unified `(resolved_mode, file_type, warnings)` tuple. Handles all backward compatibility:
+  - Old `mode="image"/"text"/"both"` still works when `input_mode` is not set.
+  - Emits a deprecation warning when both `input_mode` and `mode` are explicitly set.
+  - Validates incompatible combinations (e.g., `input_mode="visual"` on text/DOCX input raises `ValueError`).
+- **DOCX support in `summarize()`**: `summarize_ensemble()` now handles DOCX file auto-detection and text extraction, matching the existing behavior in `classify_ensemble()`.
+- **Image support in `summarize()`**: `summarize_ensemble()` now loads and processes image files when detected, enabling image summarization.
+
+### Changed
+- **`extract()` default `input_type`** changed from `"text"` to `"auto"`. When set to `"auto"`, `extract()` calls `_detect_input_type()` to auto-detect the input format. Explicit `input_type="text"` still works as before.
+
+---
+
 ## [2.10.0] - 2026-03-15
 
 ### Added
@@ -475,6 +500,7 @@ Most code will work without changes. Key differences:
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **0.2.0** | **2026-03-20** | **input_mode/input_type params, LLM-based OCR for images & scanned PDFs** |
 | **2.10.0** | **2026-03-15** | **Summarize robustness & batch parity, 5 example notebooks, remove logprobs** |
 | **2.9.0** | **2026-03-12** | **Embedding centroid tiebreaker for ensemble consensus ties** |
 | **2.8.2** | **2026-03-11** | **Claude-code provider backend, redesigned /catllm:classify flow** |
@@ -511,6 +537,7 @@ Most code will work without changes. Key differences:
 
 ---
 
+[0.2.0]: https://github.com/chrissoria/cat-stack/compare/v0.1.0...v0.2.0
 [2.10.0]: https://github.com/chrissoria/cat-llm/compare/v2.9.0...v2.10.0
 [2.9.0]: https://github.com/chrissoria/cat-llm/compare/v2.8.2...v2.9.0
 [2.8.2]: https://github.com/chrissoria/cat-llm/compare/v2.8.1...v2.8.2
