@@ -99,6 +99,7 @@ def classify(
     multi_label: bool = True,
     categories_per_call: int = None,
     pilot_test: Union[bool, int] = False,
+    system_prompt: str = "",
 ):
     """
     Unified classification function for text, image, and PDF inputs.
@@ -237,6 +238,10 @@ def classify(
             - False (default): Skip pilot test.
             - True: Run pilot test on 10 random items.
             - int: Run pilot test on that many random items.
+        system_prompt (str): Custom system-level instruction prepended to the
+            classification prompt. Use prompt_tune() to generate an optimized
+            instruction from labeled examples. Takes precedence over
+            context_prompt when provided. Default "".
 
     Returns:
         pd.DataFrame: Results with classification columns.
@@ -394,11 +399,6 @@ def classify(
 
         if pilot_result is None or not pilot_result["proceed"]:
             return None
-
-    # Capture correction examples from pilot test (empty string if no pilot test)
-    _pilot_correction_examples = ""
-    if pilot_test and categories and categories != "auto":
-        _pilot_correction_examples = pilot_result.get("correction_examples", "")
 
     # =========================================================================
     # Validate categories_per_call
@@ -641,13 +641,6 @@ def classify(
             f"Example {i}: {ex}" for i, ex in enumerate(examples, 1) if ex is not None
         )
 
-        # Append pilot test correction examples if available
-        if _pilot_correction_examples:
-            if examples_text:
-                examples_text = examples_text + "\n\n" + _pilot_correction_examples
-            else:
-                examples_text = _pilot_correction_examples
-
         model_configs = prepare_model_configs(models, auto_download=auto_download)
         json_schemas = prepare_json_schemas(model_configs, categories, use_json_schema)
         items = list(input_data) if not isinstance(input_data, list) else input_data
@@ -765,6 +758,6 @@ def classify(
         categories_per_call=categories_per_call,
         embedding_tiebreaker_state=_embedding_tiebreaker_state,
         input_mode=input_mode,
-        correction_examples=_pilot_correction_examples,
+        system_prompt=system_prompt,
     )
     return _maybe_apply_embeddings(result)

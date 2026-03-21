@@ -20,6 +20,7 @@ from .extract import extract
 from .explore import explore
 from .classify import classify
 from .summarize import summarize
+from .prompt_tune import prompt_tune
 
 # Category analysis
 from ._category_analysis import has_other_category, check_category_verbosity
@@ -92,6 +93,7 @@ __all__ = [
     "explore",
     "classify",
     "summarize",
+    "prompt_tune",
     # Category analysis
     "has_other_category",
     "check_category_verbosity",

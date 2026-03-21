@@ -1112,6 +1112,7 @@ def build_text_classification_prompt(
     stepback_insights: dict = None,
     model_name: str = None,
     multi_label: bool = True,
+    system_prompt: str = "",
 ) -> list:
     """
     Build the classification prompt for a text response.
@@ -1129,6 +1130,8 @@ def build_text_classification_prompt(
         step_back_prompt: Whether step-back prompting is enabled
         stepback_insights: Dict of step-back insights per model
         model_name: Current model name (for step-back lookup)
+        system_prompt: Custom system-level instruction to prepend (e.g. from
+            prompt_tune()). Takes precedence over context_prompt when provided.
 
     Returns:
         List of message dicts for the LLM
@@ -1163,8 +1166,10 @@ Categorize this text response "{response_text}" {categorize_instruction}:
 {examples_text}
 {json_instruction}"""
 
-    # Add context prompt prefix if enabled
-    if context_prompt:
+    # Add system-level instruction: custom system_prompt takes precedence
+    if system_prompt:
+        user_prompt = system_prompt.rstrip() + "\n\n" + user_prompt
+    elif context_prompt:
         label_type = "multi-label" if multi_label else "single-label"
         context = f"""You are an expert researcher in text data categorization.
 Apply {label_type} classification and base decisions on explicit and implicit meanings.
@@ -2072,8 +2077,8 @@ def classify_ensemble(
     # New input_mode / input_type parameters
     input_mode: str = None,
     input_type: str = "auto",
-    # Pilot test correction examples
-    correction_examples: str = "",
+    # Custom system prompt (e.g. from prompt_tune())
+    system_prompt: str = "",
 ):
     """
     Multi-class classification with support for text AND PDF inputs, single or multiple LLM models.
@@ -2412,13 +2417,6 @@ def classify_ensemble(
         f"Example {i}: {ex}" for i, ex in enumerate(examples, 1) if ex is not None
     )
 
-    # Append pilot test correction examples if provided
-    if correction_examples:
-        if examples_text:
-            examples_text = examples_text + "\n\n" + correction_examples
-        else:
-            examples_text = correction_examples
-
     survey_question_context = f"Context: {survey_question}." if survey_question else ""
 
     # Print categories
@@ -2738,6 +2736,7 @@ Categorize text responses {cove_categorize}:
                         stepback_insights=stepback_insights,
                         model_name=cfg["model"],
                         multi_label=multi_label,
+                        system_prompt=system_prompt,
                     )
                     reply, error = client.complete(
                         messages=messages,
