@@ -35,6 +35,7 @@ def prompt_tune(
     consensus_threshold: Union[str, float] = "unanimous",
     max_retries: int = 5,
     input_mode: str = None,
+    ui: str = "browser",
 ):
     """
     Automatically optimize the classification prompt using user feedback.
@@ -61,6 +62,8 @@ def prompt_tune(
         consensus_threshold: For multi-model mode. Default "unanimous".
         max_retries (int): Max retries per API call. Default 5.
         input_mode (str): Input mode override. Default None (auto-detect).
+        ui (str): Review interface for corrections. "browser" (default) opens
+            a local web page with checkboxes. "terminal" uses text-based input.
 
     Returns:
         dict with keys:
@@ -153,6 +156,7 @@ def prompt_tune(
             ensemble_kwargs=ensemble_kwargs,
             sample_size=sample_size,
             system_prompt=current_prompt,
+            ui=ui,
         )
 
         if result is None:

@@ -3,7 +3,7 @@ Pilot test module for CatLLM.
 
 Provides two capabilities:
 1. collect_corrections() — classify a small sample and collect category-level
-   user corrections. Used by prompt_tune() for APO and by classify(pilot_test=True).
+   user corrections via a browser UI. Used by prompt_tune() and classify(pilot_test=True).
 2. run_pilot_test() — wrapper that collects corrections and asks whether to proceed.
 """
 
@@ -18,9 +18,13 @@ def collect_corrections(
     ensemble_kwargs,
     sample_size=10,
     system_prompt="",
+    ui="browser",
 ):
     """
     Classify a random sample and collect per-category user corrections.
+
+    Opens a browser-based review UI where the user can toggle category
+    checkboxes for each item, then submit all corrections at once.
 
     Args:
         input_data: The full input data (list or Series).
@@ -30,6 +34,8 @@ def collect_corrections(
         ensemble_kwargs: Dict of keyword arguments to forward to classify_ensemble.
         sample_size: Number of random items to test. Default 10.
         system_prompt: Optional system prompt to use for this classification run.
+        ui: Review interface to use. "browser" (default) opens a local web page
+            with checkboxes. "terminal" uses text-based input.
 
     Returns:
         dict with keys:
@@ -43,7 +49,7 @@ def collect_corrections(
               decisions that were correct (0-1)
             - "total_flips": int — total number of category-level corrections
             - "sample_indices": list of int indices that were sampled
-        Returns None if user cancels (q/quit/Ctrl-C).
+        Returns None if user cancels.
     """
     import pandas as pd
 
@@ -87,26 +93,13 @@ def collect_corrections(
         return None
 
     is_multi_model = len(models) > 1
-    corrections = []
 
-    print(f"\n{'=' * 60}")
-    print("RESULTS — Review each classification")
-    print("Enter category numbers to flip (e.g. '1,3'), or press Enter if correct.")
-    print(f"{'=' * 60}\n")
-
+    # Extract per-item category values from the result DataFrame
+    review_items = []
     for row_idx in range(len(pilot_result)):
         row = pilot_result.iloc[row_idx]
         input_text = sample_items[row_idx]
 
-        # Truncate long inputs for display
-        display_text = str(input_text)
-        if len(display_text) > 200:
-            display_text = display_text[:200] + "..."
-
-        print(f"--- Item {row_idx + 1}/{actual_sample_size} ---")
-        print(f"  Input: {display_text}\n")
-
-        # Read per-category values
         cat_values = {}
         for cat_idx, cat in enumerate(categories, 1):
             if is_multi_model:
@@ -121,7 +114,64 @@ def collect_corrections(
                     val = 1
             cat_values[cat] = val
 
-        # Display each category with its assignment
+        review_items.append({
+            "input": input_text,
+            "values": cat_values,
+        })
+
+    # Collect corrections via the chosen UI
+    if ui == "browser":
+        corrections = _collect_via_browser(review_items, categories)
+    else:
+        corrections = _collect_via_terminal(review_items, categories)
+
+    if corrections is None:
+        return None
+
+    # Compute stats
+    n_total_fb = len(corrections)
+    n_perfect = sum(1 for c in corrections if not c["changed"])
+    total_flips = sum(len(c["changed"]) for c in corrections)
+    total_decisions = n_total_fb * len(categories)
+    accuracy = n_perfect / n_total_fb if n_total_fb > 0 else 0.0
+    cat_accuracy = (total_decisions - total_flips) / total_decisions if total_decisions > 0 else 1.0
+
+    return {
+        "corrections": corrections,
+        "accuracy": accuracy,
+        "category_accuracy": cat_accuracy,
+        "total_flips": total_flips,
+        "sample_indices": sample_indices,
+    }
+
+
+def _collect_via_browser(review_items, categories):
+    """Open a browser-based review UI and return corrections."""
+    from ._review_ui import open_review_ui
+    return open_review_ui(review_items, categories)
+
+
+def _collect_via_terminal(review_items, categories):
+    """Collect corrections via terminal text input (fallback)."""
+    corrections = []
+    n = len(review_items)
+
+    print(f"\n{'=' * 60}")
+    print("RESULTS — Review each classification")
+    print("Enter category numbers to flip (e.g. '1,3'), or press Enter if correct.")
+    print(f"{'=' * 60}\n")
+
+    for idx, item in enumerate(review_items):
+        input_text = item["input"]
+        cat_values = item["values"]
+
+        display_text = str(input_text)
+        if len(display_text) > 200:
+            display_text = display_text[:200] + "..."
+
+        print(f"--- Item {idx + 1}/{n} ---")
+        print(f"  Input: {display_text}\n")
+
         print("  Categories:")
         for cat_idx, cat in enumerate(categories, 1):
             val = cat_values[cat]
@@ -130,7 +180,6 @@ def collect_corrections(
             print(f"    {cat_idx}. {cat_display:<60s} = {marker}")
         print()
 
-        # Ask for corrections
         try:
             answer = input(
                 "  Numbers to flip (e.g. '1,3'), Enter if correct, 'q' to quit: "
@@ -143,7 +192,6 @@ def collect_corrections(
             print("\n[CatLLM] Cancelled by user.")
             return None
 
-        # Parse which categories to flip
         original = dict(cat_values)
         corrected = dict(cat_values)
         changed = []
@@ -174,21 +222,7 @@ def collect_corrections(
         })
         print()
 
-    # Compute stats
-    n_total_fb = len(corrections)
-    n_perfect = sum(1 for c in corrections if not c["changed"])
-    total_flips = sum(len(c["changed"]) for c in corrections)
-    total_decisions = n_total_fb * len(categories)
-    accuracy = n_perfect / n_total_fb if n_total_fb > 0 else 0.0
-    cat_accuracy = (total_decisions - total_flips) / total_decisions if total_decisions > 0 else 1.0
-
-    return {
-        "corrections": corrections,
-        "accuracy": accuracy,
-        "category_accuracy": cat_accuracy,
-        "total_flips": total_flips,
-        "sample_indices": sample_indices,
-    }
+    return corrections
 
 
 def run_pilot_test(
@@ -198,6 +232,7 @@ def run_pilot_test(
     classify_ensemble_fn,
     ensemble_kwargs,
     sample_size=10,
+    ui="browser",
 ):
     """
     Run a pilot classification, collect corrections, and ask whether to proceed.
@@ -216,6 +251,7 @@ def run_pilot_test(
         classify_ensemble_fn=classify_ensemble_fn,
         ensemble_kwargs=ensemble_kwargs,
         sample_size=sample_size,
+        ui=ui,
     )
 
     if result is None:
