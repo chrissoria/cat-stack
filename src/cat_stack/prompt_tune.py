@@ -1,16 +1,17 @@
 """
-Automatic Prompt Optimization (APO) for CatLLM.
+Automatic Category Optimization for CatLLM.
 
-Iteratively refines the classification system prompt by:
-1. Classifying a random sample with the current prompt
+Iteratively refines category definitions by:
+1. Classifying a random sample with the current categories
 2. Collecting category-level user corrections
-3. Asking an LLM to analyze the gap between model output and corrections
-4. Generating a revised prompt
-5. Re-classifying the same sample with the new prompt
-6. Comparing accuracy — keeping the best prompt
-7. Repeating until convergence or max iterations
+3. Asking an LLM to analyze the errors and produce enriched category
+   descriptions (keeping names fixed)
+4. Re-classifying with the improved categories
+5. Keeping the best-scoring category set
+6. Repeating until convergence or max iterations
 """
 
+import json
 from typing import Union
 
 from ._pilot_test import collect_corrections
@@ -39,11 +40,15 @@ def prompt_tune(
     optimize: str = "balanced",
 ):
     """
-    Automatically optimize the classification prompt using user feedback.
+    Automatically optimize category definitions using user feedback.
 
     Runs an iterative loop: classify a sample, collect user corrections, ask
-    an LLM to analyze the errors and generate a better prompt, then re-classify
-    to verify improvement. Returns the best system prompt found.
+    an LLM to analyze the errors and enrich the category descriptions, then
+    re-classify to verify improvement. Returns the best category definitions.
+
+    Category names are kept fixed — only descriptions and examples are added
+    or refined. This avoids overfitting to the small sample while improving
+    the model's understanding of what each category means.
 
     Args:
         input_data: The data to classify (list of text strings or pandas Series).
@@ -72,13 +77,13 @@ def prompt_tune(
 
     Returns:
         dict with keys:
-            - "system_prompt": str — the optimized system prompt (best found)
+            - "categories": list of str — the optimized category definitions
             - "iterations": list of dicts, each with:
                 - "iteration": int
-                - "system_prompt": str — the prompt used
+                - "categories": list of str — categories used
                 - "metrics": dict with "accuracy", "sensitivity", "precision"
                 - "total_flips": int — total corrections made
-            - "best_iteration": int — which iteration produced the best prompt
+            - "best_iteration": int — which iteration produced the best categories
 
     Example:
         >>> import cat_stack as cat
@@ -90,13 +95,12 @@ def prompt_tune(
         ...     sample_size=10,
         ...     max_iterations=3,
         ... )
-        >>> print(result["system_prompt"])
-        >>> # Use the optimized prompt for full classification
+        >>> print(result["categories"])
+        >>> # Use the optimized categories for full classification
         >>> results = cat.classify(
         ...     input_data=df['responses'],
-        ...     categories=["Positive", "Negative", "Neutral"],
+        ...     categories=result["categories"],
         ...     api_key="your-api-key",
-        ...     system_prompt=result["system_prompt"],
         ... )
     """
     # Build models list
@@ -141,43 +145,43 @@ def prompt_tune(
         )
     _target_fn = _optimize_fns[optimize]
 
+    # Extract original category names (before any " — " descriptions)
+    original_names = [c.split(" — ")[0].split(" - ")[0].strip() for c in categories]
+
     iterations = []
-    current_prompt = ""
-    best_prompt = ""
+    current_categories = list(categories)
+    best_categories = list(categories)
     best_target = -1.0
     best_iteration = 0
 
     print(f"\n{'=' * 60}")
-    print(f"PROMPT TUNING — up to {max_iterations} iteration(s), {sample_size} sample(s) each")
+    print(f"CATEGORY TUNING — up to {max_iterations} iteration(s), {sample_size} sample(s) each")
     print(f"  Optimizing for: {optimize}")
     print(f"{'=' * 60}")
 
     for iteration in range(1, max_iterations + 1):
         print(f"\n--- Iteration {iteration}/{max_iterations} ---")
 
-        if current_prompt:
-            # Truncate for display
-            display_prompt = current_prompt
-            if len(display_prompt) > 200:
-                display_prompt = display_prompt[:200] + "..."
-            print(f"  Current prompt: {display_prompt}\n")
-        else:
-            print("  Current prompt: (default — no custom instruction)\n")
+        # Show current categories
+        print("  Categories:")
+        for i, cat in enumerate(current_categories, 1):
+            cat_display = cat if len(cat) <= 70 else cat[:67] + "..."
+            print(f"    {i}. {cat_display}")
+        print()
 
         # Step 1: Classify sample and collect corrections
         result = collect_corrections(
             input_data=input_data,
-            categories=categories,
+            categories=current_categories,
             models=models,
             classify_ensemble_fn=classify_ensemble,
             ensemble_kwargs=ensemble_kwargs,
             sample_size=sample_size,
-            system_prompt=current_prompt,
             ui=ui,
         )
 
         if result is None:
-            print("\n[CatLLM] Prompt tuning cancelled.")
+            print("\n[CatLLM] Category tuning cancelled.")
             break
 
         corrections = result["corrections"]
@@ -194,7 +198,7 @@ def prompt_tune(
 
         iterations.append({
             "iteration": iteration,
-            "system_prompt": current_prompt,
+            "categories": list(current_categories),
             "metrics": metrics,
             "total_flips": total_flips,
         })
@@ -202,7 +206,7 @@ def prompt_tune(
         # Track best
         if target_score > best_target:
             best_target = target_score
-            best_prompt = current_prompt
+            best_categories = list(current_categories)
             best_iteration = iteration
 
         # Perfect score — no need to continue
@@ -210,74 +214,72 @@ def prompt_tune(
             print("\n  All classifications correct — no further tuning needed.")
             break
 
-        # Last iteration — don't generate a new prompt
+        # Last iteration — don't generate new categories
         if iteration == max_iterations:
             print(f"\n  Reached max iterations ({max_iterations}).")
             break
 
-        # Step 2: Generate improved prompt via meta-LLM call
-        print("\n  Generating improved prompt...")
-        new_prompt = _generate_improved_prompt(
+        # Step 2: Generate improved categories via meta-LLM call
+        print("\n  Generating improved category definitions...")
+        new_categories = _generate_improved_categories(
             corrections=corrections,
-            categories=categories,
-            current_prompt=current_prompt,
+            categories=current_categories,
+            original_names=original_names,
             description=description,
             survey_question=survey_question,
             multi_label=multi_label,
+            optimize=optimize,
             meta_model=meta_model,
             meta_source=meta_source,
             meta_key=meta_key,
             max_retries=max_retries,
         )
 
-        if new_prompt is None:
-            print("  Failed to generate improved prompt. Stopping.")
+        if new_categories is None:
+            print("  Failed to generate improved categories. Stopping.")
             break
 
-        current_prompt = new_prompt
+        current_categories = new_categories
 
     # Final summary
     print(f"\n{'=' * 60}")
-    print(f"PROMPT TUNING COMPLETE")
+    print(f"CATEGORY TUNING COMPLETE")
     print(f"  Iterations run:  {len(iterations)}")
     print(f"  Best iteration:  {best_iteration}")
     print(f"  Optimized for:   {optimize}")
     print(f"  Best target:     {best_target * 100:.1f}%")
-    if best_prompt:
-        print(f"  Optimized prompt:")
-        for line in best_prompt.split("\n"):
-            print(f"    {line}")
-    else:
-        print(f"  Best prompt: (default — no custom instruction needed)")
+    print(f"\n  Optimized categories:")
+    for i, cat in enumerate(best_categories, 1):
+        print(f"    {i}. {cat}")
     print(f"{'=' * 60}\n")
 
     return {
-        "system_prompt": best_prompt,
+        "categories": best_categories,
         "iterations": iterations,
         "best_iteration": best_iteration,
     }
 
 
-def _generate_improved_prompt(
+def _generate_improved_categories(
     corrections,
     categories,
-    current_prompt,
+    original_names,
     description,
     survey_question,
     multi_label,
+    optimize,
     meta_model,
     meta_source,
     meta_key,
     max_retries,
 ):
     """
-    Use an LLM to analyze classification errors and generate an improved prompt.
-
-    Sends a meta-prompt with the current instruction, the errors observed, and
-    asks the model to produce a better classification instruction.
+    Use an LLM to analyze classification errors and generate improved category
+    definitions. Category names stay fixed; only descriptions and examples
+    are added or refined.
 
     Returns:
-        str: The improved system prompt, or None on failure.
+        list of str: The improved category definitions, or None on failure.
     """
     # Format the error analysis
     error_lines = []
@@ -306,9 +308,17 @@ def _generate_improved_prompt(
     errors_text = "\n".join(error_lines) if error_lines else "(no errors)"
     correct_text = "\n".join(correct_lines) if correct_lines else "(none)"
 
-    # Build categories description
+    # Build current categories display
     categories_str = "\n".join(f"  {i+1}. {cat}" for i, cat in enumerate(categories))
+    original_names_str = "\n".join(f"  {i+1}. {name}" for i, name in enumerate(original_names))
     label_mode = "multi-label (multiple categories can apply)" if multi_label else "single-label (exactly one category)"
+
+    # Optimization emphasis
+    optimize_guidance = {
+        "balanced": "Balance accuracy, sensitivity, and precision equally.",
+        "precision": "Prioritize precision — add constraints that reduce false positives (model assigning 1 when it should be 0).",
+        "sensitivity": "Prioritize sensitivity — add guidance that reduces false negatives (model assigning 0 when it should be 1).",
+    }
 
     # Context
     context_parts = []
@@ -318,39 +328,53 @@ def _generate_improved_prompt(
         context_parts.append(f"Survey question: {survey_question}")
     context_text = "\n".join(context_parts) if context_parts else "(no additional context)"
 
-    # Current prompt
-    current_prompt_text = current_prompt if current_prompt else "(no custom instruction — using default)"
+    # Build JSON schema for structured output
+    schema_example = json.dumps(
+        {name: f"{name} — description. Example: ..." for name in original_names[:2]},
+        indent=2,
+    )
 
-    meta_prompt = f"""You are an expert prompt engineer optimizing a text classification system.
+    meta_prompt = f"""You are an expert at defining classification categories for text analysis.
 
-TASK: Analyze the classification errors below and generate an improved instruction that
-would fix the errors while maintaining correct classifications.
+TASK: Analyze the classification errors below and produce improved category definitions.
+You must keep the exact category NAMES fixed but can add or refine descriptions,
+clarifications, and examples for each category.
 
 CLASSIFICATION SETUP:
 - Mode: {label_mode}
-- Categories:
-{categories_str}
 - Context: {context_text}
 
-CURRENT INSTRUCTION:
-{current_prompt_text}
+ORIGINAL CATEGORY NAMES (these must stay exactly the same):
+{original_names_str}
 
-MISCLASSIFIED ITEMS (errors the instruction must fix):
+CURRENT CATEGORY DEFINITIONS:
+{categories_str}
+
+MISCLASSIFIED ITEMS (errors the definitions must fix):
 {errors_text}
 
-CORRECTLY CLASSIFIED ITEMS (the instruction must preserve these):
+CORRECTLY CLASSIFIED ITEMS (definitions must preserve these):
 {correct_text}
 
-INSTRUCTIONS FOR YOU:
+OPTIMIZATION TARGET:
+{optimize_guidance[optimize]}
+
+INSTRUCTIONS:
 1. Analyze what the model is getting wrong — look for patterns in the errors.
    Are certain categories confused? Is the model over- or under-classifying?
-2. Generate an improved classification instruction that:
-   - Addresses the specific error patterns you identified
+2. For each category, write an improved definition that:
+   - Starts with the exact original category name, followed by " — "
+   - Adds a clear description of what belongs in this category
    - Clarifies boundary cases between confused categories
-   - Preserves correct behavior on the items that were already right
-   - Is concise and actionable (not verbose)
-3. Return ONLY the improved instruction text. No explanation, no preamble,
-   no markdown formatting. Just the instruction itself."""
+   - Includes 1-2 short examples if helpful
+   - Is concise (aim for one line per category)
+3. Return a JSON object mapping each original category name to its improved
+   definition string.
+
+Example format:
+{schema_example}
+
+Return ONLY the JSON object. No explanation, no preamble, no markdown."""
 
     try:
         client = UnifiedLLMClient(
@@ -369,17 +393,30 @@ INSTRUCTIONS FOR YOU:
             print(f"  [CatLLM] Meta-prompt error: {error}")
             return None
 
-        # Clean up the response
-        improved = reply.strip()
-        # Remove markdown code fences if present
-        if improved.startswith("```"):
-            lines = improved.split("\n")
-            # Remove first and last ``` lines
+        # Clean up and parse
+        text = reply.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
             lines = [l for l in lines if not l.strip().startswith("```")]
-            improved = "\n".join(lines).strip()
+            text = "\n".join(lines).strip()
 
-        return improved
+        mapping = json.loads(text)
 
+        # Build new categories list preserving original order
+        new_categories = []
+        for name in original_names:
+            if name in mapping:
+                new_categories.append(mapping[name])
+            else:
+                # Fallback: keep existing definition
+                idx = original_names.index(name)
+                new_categories.append(categories[idx])
+
+        return new_categories
+
+    except json.JSONDecodeError as e:
+        print(f"  [CatLLM] Could not parse LLM response as JSON: {e}")
+        return None
     except Exception as e:
-        print(f"  [CatLLM] Failed to generate improved prompt: {e}")
+        print(f"  [CatLLM] Failed to generate improved categories: {e}")
         return None
