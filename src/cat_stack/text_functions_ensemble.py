@@ -176,49 +176,351 @@ _IMAGE_EXTENSIONS = {
     '.ico', '.psd', '.jfif', '.pjpeg', '.pjp', '.jpe'
 }
 
+_DOCX_EXTENSIONS = {'.docx', '.doc'}
+
+
+def _extract_docx_text(file_path: str) -> str:
+    """Extract text from a DOCX file using python-docx."""
+    try:
+        from docx import Document
+    except ImportError:
+        raise ImportError(
+            "The 'python-docx' package is required for DOCX support. "
+            "Install it with: pip install python-docx"
+        )
+    doc = Document(file_path)
+    return "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
+
+
+def _convert_docx_to_text(input_data):
+    """Convert DOCX file paths to extracted text strings.
+
+    Accepts the same input formats as classify(): single path, list, Series, or directory.
+    Returns the same shape but with file paths replaced by extracted text.
+    """
+    def _convert_single(item):
+        if item is None or (isinstance(item, float) and pd.isna(item)):
+            return item
+        item_str = str(item)
+        ext = os.path.splitext(item_str)[1].lower()
+        if ext in _DOCX_EXTENSIONS and os.path.isfile(item_str):
+            return _extract_docx_text(item_str)
+        return item
+
+    # Single file path
+    if isinstance(input_data, (str, Path)):
+        input_str = str(input_data)
+        # Directory of DOCX files
+        if os.path.isdir(input_str):
+            texts = []
+            for f in sorted(os.listdir(input_str)):
+                f_path = os.path.join(input_str, f)
+                f_ext = os.path.splitext(f)[1].lower()
+                if f_ext in _DOCX_EXTENSIONS:
+                    texts.append(_extract_docx_text(f_path))
+            return texts if texts else [input_str]
+        return _convert_single(input_str)
+
+    # List or Series
+    if isinstance(input_data, pd.Series):
+        return input_data.apply(_convert_single)
+
+    if hasattr(input_data, '__iter__'):
+        return [_convert_single(item) for item in input_data]
+
+    return input_data
+
+
+def _ocr_extract_text(
+    cfg: dict,
+    image_data: dict = None,
+    page_data: dict = None,
+    max_retries: int = 3,
+) -> tuple:
+    """
+    Use an LLM to extract (OCR) text from an image or PDF page.
+
+    Sends a multimodal message asking the model to return only the raw text
+    visible in the document.  No JSON schema is used — the response is plain text.
+
+    Args:
+        cfg: Model configuration dict (from prepare_model_configs)
+        image_data: Dict from _prepare_image_data (for images)
+        page_data: Dict from _prepare_page_data (for PDF pages)
+        max_retries: Max retry attempts
+
+    Returns:
+        (extracted_text, error) — error is None on success
+    """
+    ocr_prompt = (
+        "Extract all visible text from this document. "
+        "Return only the raw extracted text, preserving paragraph breaks. "
+        "Do not add any commentary, labels, or formatting."
+    )
+
+    provider = cfg["provider"]
+
+    # Build multimodal message based on source type
+    if image_data is not None:
+        encoded = image_data.get("encoded_image", "")
+        ext = image_data.get("extension", "png")
+
+        if provider == "anthropic":
+            content = [
+                {"type": "text", "text": ocr_prompt},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": f"image/{ext}",
+                        "data": encoded,
+                    },
+                },
+            ]
+        elif provider == "google":
+            content = [
+                {"type": "text", "text": ocr_prompt},
+                {"type": "inline_data", "mime_type": f"image/{ext}", "data": encoded},
+            ]
+        else:
+            encoded_url = f"data:image/{ext};base64,{encoded}"
+            content = [
+                {"type": "text", "text": ocr_prompt},
+                {"type": "image_url", "image_url": {"url": encoded_url, "detail": "high"}},
+            ]
+
+    elif page_data is not None:
+        # PDF page — prefer image_bytes, fall back to pdf_bytes
+        if page_data.get("image_bytes"):
+            img_b64 = _encode_bytes_to_base64(page_data["image_bytes"])
+            if provider == "anthropic":
+                content = [
+                    {"type": "text", "text": ocr_prompt},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": img_b64,
+                        },
+                    },
+                ]
+            elif provider == "google":
+                content = [
+                    {"type": "text", "text": ocr_prompt},
+                    {"type": "inline_data", "mime_type": "image/png", "data": img_b64},
+                ]
+            else:
+                encoded_url = f"data:image/png;base64,{img_b64}"
+                content = [
+                    {"type": "text", "text": ocr_prompt},
+                    {"type": "image_url", "image_url": {"url": encoded_url, "detail": "high"}},
+                ]
+        elif page_data.get("pdf_bytes"):
+            pdf_b64 = _encode_bytes_to_base64(page_data["pdf_bytes"])
+            if provider == "anthropic":
+                content = [
+                    {"type": "text", "text": ocr_prompt},
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": pdf_b64,
+                        },
+                    },
+                ]
+            elif provider == "google":
+                content = [
+                    {"type": "text", "text": ocr_prompt},
+                    {"type": "inline_data", "mime_type": "application/pdf", "data": pdf_b64},
+                ]
+            else:
+                return ("", "Provider does not support native PDF for OCR; render as image first")
+        else:
+            return ("", "No image or PDF bytes available for OCR")
+    else:
+        return ("", "No image_data or page_data provided for OCR")
+
+    messages = [{"role": "user", "content": content}]
+
+    try:
+        if provider == "google":
+            # Google multimodal needs direct API call (handled later in classify_ensemble
+            # via _call_google_multimodal). Here we use the same approach but without
+            # JSON schema so we get plain text back.
+            import requests
+
+            model_name = cfg["model"]
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+            headers = {
+                "x-goog-api-key": cfg["api_key"],
+                "Content-Type": "application/json",
+            }
+
+            parts = []
+            for part in content:
+                if part.get("type") == "text":
+                    parts.append({"text": part["text"]})
+                elif part.get("type") == "inline_data":
+                    parts.append({
+                        "inline_data": {
+                            "mime_type": part["mime_type"],
+                            "data": part["data"],
+                        }
+                    })
+
+            payload = {"contents": [{"parts": parts}]}
+
+            for attempt in range(max_retries):
+                try:
+                    response = requests.post(url, headers=headers, json=payload, timeout=120)
+                    response.raise_for_status()
+                    result = response.json()
+                    if "candidates" in result and result["candidates"]:
+                        text = result["candidates"][0]["content"]["parts"][0]["text"]
+                        return (text.strip(), None)
+                    return ("", "No response from Google OCR")
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
+                        time.sleep(2 * (2 ** attempt))
+                    else:
+                        return ("", f"Google OCR HTTP error: {e}")
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        time.sleep(2 * (2 ** attempt))
+                    else:
+                        return ("", f"Google OCR error: {e}")
+            return ("", "Google OCR max retries exceeded")
+
+        else:
+            client = UnifiedLLMClient(
+                provider=provider,
+                api_key=cfg["api_key"],
+                model=cfg["model"],
+            )
+            reply, error = client.complete(
+                messages=messages,
+                json_schema=None,
+                force_json=False,
+                max_retries=max_retries,
+            )
+            if error:
+                return ("", f"OCR error: {error}")
+            return (reply.strip() if reply else "", None)
+
+    except Exception as e:
+        return ("", f"OCR exception: {e}")
+
+
+def _resolve_input_params(
+    input_mode,
+    input_type,
+    old_mode,
+    input_data,
+) -> tuple:
+    """
+    Resolve the new input_mode/input_type params, handling backward compat.
+
+    Args:
+        input_mode: "text", "visual", or None (auto based on detected type)
+        input_type: "auto", "pdf", "image", "docx", "text" — file type filter
+        old_mode: Legacy mode param ("image", "text", "both")
+        input_data: The raw input data (for auto-detection)
+
+    Returns:
+        (resolved_mode, file_type, warnings) where:
+            resolved_mode: "text" or "visual"
+            file_type: "text", "pdf", "image", "docx"
+            warnings: list of deprecation/info warning strings
+    """
+    warnings_list = []
+
+    # Step 1: Detect the file type
+    if input_type == "auto":
+        file_type = _detect_input_type(input_data)
+    else:
+        file_type = input_type.lower().rstrip("s")
+
+    # Step 2: Resolve input_mode
+    if input_mode is not None:
+        resolved_mode = input_mode.lower()
+        if resolved_mode not in ("text", "visual"):
+            raise ValueError(
+                f"input_mode must be 'text' or 'visual', got '{input_mode}'"
+            )
+        # Validate: visual mode on text/docx is an error
+        if resolved_mode == "visual" and file_type in ("text", "docx"):
+            raise ValueError(
+                f"input_mode='visual' is not compatible with {file_type} input. "
+                f"Visual mode requires image or PDF files."
+            )
+        # Warn if old mode is also set
+        if old_mode and old_mode != "image":
+            warnings_list.append(
+                f"[CatStack] Both input_mode='{input_mode}' and mode='{old_mode}' "
+                f"are set. Using input_mode='{input_mode}' (mode is deprecated)."
+            )
+    else:
+        # input_mode is None — backward compat defaults
+        if file_type in ("text", "docx"):
+            resolved_mode = "text"
+        elif file_type == "image":
+            resolved_mode = "visual"  # preserve current behavior
+        elif file_type == "pdf":
+            # Map old mode param to new system
+            if old_mode == "text":
+                resolved_mode = "text"
+            else:
+                resolved_mode = "visual"  # "image" and "both" → visual
+        else:
+            resolved_mode = "text"
+
+    return (resolved_mode, file_type, warnings_list)
+
 
 def _detect_input_type(input_data) -> str:
     """
-    Detect if input is text strings, PDF files, or image files.
+    Detect if input is text strings, PDF files, image files, or DOCX files.
 
     Auto-detection logic:
     - If input ends in .pdf → PDF mode
+    - If input ends in .docx/.doc → DOCX mode (converted to text)
     - If input ends in image extension (.png, .jpg, etc.) → Image mode
-    - If input is a directory → Check first file to determine PDF or Image mode
+    - If input is a directory → Check first file to determine mode
     - Otherwise → Text mode
 
     Args:
-        input_data: Text strings, PDF paths, image paths, or directory path
+        input_data: Text strings, PDF paths, image paths, DOCX paths, or directory path
 
     Returns:
-        'text', 'pdf', or 'image'
+        'text', 'pdf', 'image', or 'docx'
     """
     # Handle single string input
     if isinstance(input_data, (str, Path)):
         survey_str = str(input_data)
         ext = os.path.splitext(survey_str)[1].lower()
 
-        # Check for PDF
         if ext == '.pdf':
             return 'pdf'
-
-        # Check for image
+        if ext in _DOCX_EXTENSIONS:
+            return 'docx'
         if ext in _IMAGE_EXTENSIONS:
             return 'image'
 
-        # Check if it's a directory (could contain PDFs or images)
+        # Check if it's a directory (could contain PDFs, images, or DOCX)
         if os.path.isdir(survey_str):
-            # Check first file to determine type
             try:
                 for f in sorted(os.listdir(survey_str)):
                     f_ext = os.path.splitext(f)[1].lower()
                     if f_ext == '.pdf':
                         return 'pdf'
+                    if f_ext in _DOCX_EXTENSIONS:
+                        return 'docx'
                     if f_ext in _IMAGE_EXTENSIONS:
                         return 'image'
             except OSError:
                 pass
-            # Default to PDF for directories (backward compatibility)
             return 'pdf'
 
         return 'text'
@@ -231,9 +533,10 @@ def _detect_input_type(input_data) -> str:
                 ext = os.path.splitext(item_str)[1].lower()
                 if ext == '.pdf':
                     return 'pdf'
+                if ext in _DOCX_EXTENSIONS:
+                    return 'docx'
                 if ext in _IMAGE_EXTENSIONS:
                     return 'image'
-                # First non-null item is text
                 return 'text'
 
     return 'text'
@@ -1766,6 +2069,9 @@ def classify_ensemble(
     categories_per_call: int = None,
     # Embedding tiebreaker
     embedding_tiebreaker_state: dict = None,
+    # New input_mode / input_type parameters
+    input_mode: str = None,
+    input_type: str = "auto",
 ):
     """
     Multi-class classification with support for text AND PDF inputs, single or multiple LLM models.
@@ -1972,15 +2278,38 @@ def classify_ensemble(
         print(f"  - {cfg['model']} ({cfg['provider']}) -> column suffix: {cfg['sanitized_name']}")
 
     # =============================================================================
-    # DETECT INPUT TYPE: Text vs PDF vs Image
+    # RESOLVE INPUT MODE AND FILE TYPE
     # =============================================================================
-    input_type = _detect_input_type(input_data)
-    print(f"\nInput type detected: {input_type.upper()}")
+    resolved_mode, file_type, resolve_warnings = _resolve_input_params(
+        input_mode=input_mode,
+        input_type=input_type,
+        old_mode=pdf_mode,
+        input_data=input_data,
+    )
+    for w in resolve_warnings:
+        print(w)
+
+    print(f"\nFile type detected: {file_type.upper()}")
+    print(f"Input mode: {resolved_mode}")
+
+    is_visual_mode = (resolved_mode == "visual")
+    needs_ocr = (resolved_mode == "text" and file_type in ("image", "pdf"))
+
+    # DOCX pre-processing: convert to text, then proceed as text mode
+    if file_type == 'docx':
+        print("Converting DOCX files to text...")
+        input_data = _convert_docx_to_text(input_data)
+        file_type = 'text'
+        needs_ocr = False
+        print(f"Converted to {len(input_data) if hasattr(input_data, '__len__') else 1} text item(s)")
+
+    # Guard: no OCR in batch mode (batch APIs don't support the two-call pattern)
+    # (This is checked at the classify() level too, but guard here as well)
 
     # Initialize processing variables
     items_to_process = []
-    is_pdf_mode = (input_type == 'pdf')
-    is_image_mode = (input_type == 'image')
+    is_pdf_mode = (file_type == 'pdf')
+    is_image_mode = (file_type == 'image')
 
     # Build example JSON for visual modes (PDF/image)
     category_dict = {str(i+1): "0" for i in range(len(categories))}
@@ -2039,6 +2368,20 @@ def classify_ensemble(
         # TEXT MODE: input_data is the items to process
         # =================================================================
         items_to_process = input_data
+
+    # Select OCR model config: first model that supports multimodal (skip Ollama)
+    _ocr_cfg = None
+    if needs_ocr:
+        _text_only_providers = {"ollama"}
+        for cfg in model_configs:
+            if cfg["provider"] not in _text_only_providers:
+                _ocr_cfg = cfg
+                break
+        if _ocr_cfg is None:
+            raise ValueError(
+                "input_mode='text' on image/PDF input requires OCR, but no multimodal-capable "
+                "model is available in the ensemble. Add a cloud provider model (OpenAI, Anthropic, Google, etc.)."
+            )
 
     # Auto-resolve parallel mode: sequential for all-local (Ollama), parallel otherwise
     if parallel is None:
@@ -2513,7 +2856,9 @@ Categorize text responses {cove_categorize}:
     total_calls = len(items_to_process) * len(model_configs)
 
     # Set progress description based on mode
-    if is_image_mode:
+    if needs_ocr:
+        progress_desc = "OCR + Classifying" + (" images" if is_image_mode else " PDF pages")
+    elif is_image_mode:
         progress_desc = "Classifying images"
     elif is_pdf_mode:
         progress_desc = "Classifying PDF pages"
@@ -2540,6 +2885,61 @@ Categorize text responses {cove_categorize}:
             display_id = item
             pdf_metadata = None
             image_metadata = None
+
+        # =================================================================
+        # OCR PRE-PROCESSING: Extract text from images/PDFs before classifying
+        # =================================================================
+        if needs_ocr and not (not is_pdf_mode and not is_image_mode):
+            ocr_text = None
+
+            if is_image_mode and isinstance(item, tuple) and len(item) == 2:
+                img_path, img_label = item
+                img_data = _prepare_image_data(img_path, img_label)
+                if img_data.get("error"):
+                    ocr_text = ""
+                else:
+                    ocr_text, ocr_err = _ocr_extract_text(
+                        cfg=_ocr_cfg, image_data=img_data, max_retries=max_retries
+                    )
+                    if ocr_err:
+                        import sys
+                        sys.stderr.write(f"[CatStack] OCR failed for {img_label}: {ocr_err}\n")
+                        ocr_text = ""
+
+            elif is_pdf_mode and isinstance(item, tuple) and len(item) == 3:
+                p_path, p_idx, p_label = item
+                # Try PyMuPDF text extraction first
+                text_content, text_valid, text_err = _extract_page_text(p_path, p_idx)
+                if text_valid and text_content and len(text_content.strip()) > 20:
+                    ocr_text = text_content
+                else:
+                    # No extractable text — render as image and OCR
+                    print(f"[CatStack] Page {p_label} has no extractable text. Using LLM-based OCR.")
+                    pg_data = _prepare_page_data(
+                        pdf_path=p_path,
+                        page_index=p_idx,
+                        page_label=p_label,
+                        pdf_mode="image",
+                        provider=_ocr_cfg["provider"],
+                        pdf_dpi=pdf_dpi,
+                    )
+                    if pg_data.get("error"):
+                        ocr_text = ""
+                    else:
+                        ocr_text, ocr_err = _ocr_extract_text(
+                            cfg=_ocr_cfg, page_data=pg_data, max_retries=max_retries
+                        )
+                        if ocr_err:
+                            import sys
+                            sys.stderr.write(f"[CatStack] OCR failed for {p_label}: {ocr_err}\n")
+                            ocr_text = ""
+
+            # Replace the item with OCR-extracted text for classification
+            if ocr_text is not None:
+                _pre_ocr_item = item  # preserve original tuple for retry
+                item = ocr_text
+                # After OCR, this item is a plain text string so classify_single
+                # will naturally route to the text classification path
 
         # Check for NaN (text mode only)
         if not is_pdf_mode and not is_image_mode and pd.isna(item):
@@ -3087,6 +3487,9 @@ def summarize_ensemble(
     max_workers: int = None,
     parallel: bool = None,
     auto_download: bool = False,
+    # New input_mode / input_type parameters
+    input_mode: str = None,
+    input_type: str = "auto",
 ) -> pd.DataFrame:
     """
     Summarize text or PDF inputs using LLMs with optional multi-model ensemble.
@@ -3171,9 +3574,30 @@ def summarize_ensemble(
     if safety and filename is None:
         raise TypeError("filename is required when using safety=True.")
 
-    # Detect input type: Text vs PDF
-    input_type = _detect_input_type(input_data)
-    is_pdf_mode = (input_type == 'pdf')
+    # Resolve input mode and file type
+    resolved_mode, file_type, resolve_warnings = _resolve_input_params(
+        input_mode=input_mode,
+        input_type=input_type,
+        old_mode=pdf_mode,
+        input_data=input_data,
+    )
+    for w in resolve_warnings:
+        print(w)
+
+    print(f"\nFile type detected: {file_type.upper()}")
+    print(f"Input mode: {resolved_mode}")
+
+    needs_ocr = (resolved_mode == "text" and file_type in ("image", "pdf"))
+    is_pdf_mode = (file_type == 'pdf')
+
+    # DOCX pre-processing
+    if file_type == 'docx':
+        print("Converting DOCX files to text...")
+        input_data = _convert_docx_to_text(input_data)
+        file_type = 'text'
+        is_pdf_mode = False
+        needs_ocr = False
+        print(f"Converted to {len(input_data) if hasattr(input_data, '__len__') else 1} text item(s)")
 
     if is_pdf_mode:
         # Validate pdf_mode parameter
@@ -3181,7 +3605,6 @@ def summarize_ensemble(
         if pdf_mode not in {"image", "text", "both"}:
             raise ValueError(f"pdf_mode must be 'image', 'text', or 'both', got: {pdf_mode}")
 
-        print(f"\nInput type detected: PDF")
         print(f"PDF processing mode: {pdf_mode}")
 
         # Load PDF files
@@ -3198,6 +3621,17 @@ def summarize_ensemble(
 
         items_to_process = all_pages
         print(f"Total PDF pages to summarize: {len(items_to_process)}")
+    elif file_type == 'image':
+        # IMAGE MODE: Load images
+        print(f"Loading images...")
+        image_files = _load_image_files(input_data)
+        if not image_files:
+            raise ValueError("No images found in the provided input.")
+        items_to_process = [
+            (img_path, os.path.splitext(os.path.basename(img_path))[0])
+            for img_path in image_files
+        ]
+        print(f"Total images to summarize: {len(items_to_process)}")
     else:
         # TEXT MODE: Normalize input to list
         print(f"\nInput type detected: TEXT")
@@ -3381,8 +3815,30 @@ def summarize_ensemble(
                 error_msg = str(e)
                 return (model_name, '{"summary": ""}', error_msg)
 
+    # Select OCR model config if needed
+    _ocr_cfg = None
+    if needs_ocr:
+        _text_only_providers = {"ollama"}
+        for cfg in model_configs:
+            if cfg["provider"] not in _text_only_providers:
+                _ocr_cfg = cfg
+                break
+        if _ocr_cfg is None:
+            raise ValueError(
+                "input_mode='text' on image/PDF input requires OCR, but no multimodal-capable "
+                "model is available. Add a cloud provider model (OpenAI, Anthropic, Google, etc.)."
+            )
+
     # Process all items
-    progress_desc = "Summarizing PDF pages" if is_pdf_mode else "Summarizing texts"
+    is_image_mode = (file_type == 'image')
+    if needs_ocr:
+        progress_desc = "OCR + Summarizing" + (" images" if is_image_mode else " PDF pages")
+    elif is_pdf_mode:
+        progress_desc = "Summarizing PDF pages"
+    elif is_image_mode:
+        progress_desc = "Summarizing images"
+    else:
+        progress_desc = "Summarizing texts"
     print(f"\n{progress_desc}...")
 
     # Auto-resolve parallel mode: sequential for all-local (Ollama), parallel otherwise
@@ -3397,6 +3853,55 @@ def summarize_ensemble(
     total_items = len(items_to_process)
 
     for idx, item in enumerate(tqdm(items_to_process, desc=progress_desc)):
+        original_item = item  # preserve for metadata extraction
+
+        # OCR pre-processing: extract text from images/PDFs before summarizing
+        if needs_ocr:
+            ocr_text = None
+
+            if is_image_mode and isinstance(item, tuple) and len(item) == 2:
+                img_path, img_label = item
+                img_data = _prepare_image_data(img_path, img_label)
+                if img_data.get("error"):
+                    ocr_text = ""
+                else:
+                    ocr_text, ocr_err = _ocr_extract_text(
+                        cfg=_ocr_cfg, image_data=img_data, max_retries=max_retries
+                    )
+                    if ocr_err:
+                        import sys
+                        sys.stderr.write(f"[CatStack] OCR failed for {img_label}: {ocr_err}\n")
+                        ocr_text = ""
+
+            elif is_pdf_mode and isinstance(item, tuple) and len(item) == 3:
+                p_path, p_idx, p_label = item
+                text_content, text_valid, text_err = _extract_page_text(p_path, p_idx)
+                if text_valid and text_content and len(text_content.strip()) > 20:
+                    ocr_text = text_content
+                else:
+                    print(f"[CatStack] Page {p_label} has no extractable text. Using LLM-based OCR.")
+                    pg_data = _prepare_page_data(
+                        pdf_path=p_path,
+                        page_index=p_idx,
+                        page_label=p_label,
+                        pdf_mode="image",
+                        provider=_ocr_cfg["provider"],
+                        pdf_dpi=pdf_dpi,
+                    )
+                    if pg_data.get("error"):
+                        ocr_text = ""
+                    else:
+                        ocr_text, ocr_err = _ocr_extract_text(
+                            cfg=_ocr_cfg, page_data=pg_data, max_retries=max_retries
+                        )
+                        if ocr_err:
+                            import sys
+                            sys.stderr.write(f"[CatStack] OCR failed for {p_label}: {ocr_err}\n")
+                            ocr_text = ""
+
+            if ocr_text is not None:
+                item = ocr_text
+
         item_results = {}
         item_errors = {}
 
@@ -3422,10 +3927,10 @@ def summarize_ensemble(
                     item_errors[model_name] = error
                     failed_pairs.append((idx, model_name))
 
-        # Store results for this item
+        # Store results for this item (use original_item to preserve metadata tuples)
         result_entry = {
             "idx": idx,
-            "input_data": item,
+            "input_data": original_item,
             "model_results": item_results,
             "errors": item_errors,
         }

@@ -40,7 +40,7 @@ from .pdf_functions import (
 def extract(
     input_data,
     api_key,
-    input_type="text",
+    input_type="auto",
     survey_question="",
     description=None,
     max_categories=12,
@@ -59,6 +59,7 @@ def extract(
     progress_callback=None,
     chunk_delay: float = 0.0,
     auto_download: bool = False,
+    input_mode=None,
 ):
     """
     Unified category extraction function for text, image, and PDF inputs.
@@ -74,7 +75,8 @@ def extract(
             - For pdf: directory path, single file, or list of PDF paths
         api_key (str): API key for the model provider.
         input_type (str): Type of input data. Options:
-            - "text" (default): Text responses
+            - "auto" (default): Auto-detect from file extensions
+            - "text": Text responses
             - "image": Image files
             - "pdf": PDF documents
         survey_question (str): The survey question or description of the text data.
@@ -141,6 +143,14 @@ def extract(
         ... )
     """
     input_type = input_type.lower().rstrip('s')  # Normalize: "texts" -> "text", "images" -> "image", "pdfs" -> "pdf"
+
+    # Auto-detect input type if set to "auto"
+    if input_type == "auto":
+        from .text_functions_ensemble import _detect_input_type
+        input_type = _detect_input_type(input_data)
+        # docx → text for extraction purposes
+        if input_type == "docx":
+            input_type = "text"
 
     # survey_question is the canonical name; description is kept for backward compatibility
     resolved_survey_question = survey_question if survey_question else (description or "")

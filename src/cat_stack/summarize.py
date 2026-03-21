@@ -36,6 +36,8 @@ def summarize(
     user_model: str = "gpt-4o",
     model_source: str = "auto",
     mode: str = "image",
+    input_mode: str = None,
+    input_type: str = "auto",
     pdf_dpi: int = 150,
     creativity: float = None,
     thinking_budget: int = 0,
@@ -79,7 +81,15 @@ def summarize(
         focus (str): What to focus on (e.g., "main arguments", "emotional content")
         user_model (str): Model to use (default "gpt-4o")
         model_source (str): Provider - "auto", "openai", "anthropic", "google", etc.
-        mode (str): PDF processing mode (only used for PDF input):
+        input_mode (str): What you want the model to do with the input. Default None.
+            - None: Auto-select based on file type (text→"text", image→"visual",
+              pdf→uses mode param or "visual")
+            - "text": Summarize text content, regardless of source format. For images
+              and scanned PDFs, uses LLM-based OCR to extract text first.
+            - "visual": Summarize visual features of images/rendered PDFs.
+        input_type (str): File type filter. Default "auto" (auto-detect).
+            Options: "auto", "pdf", "image", "text", "docx"
+        mode (str): PDF processing mode (legacy, use input_mode instead):
             - "image" (default): Render pages as images
             - "text": Extract text only
             - "both": Send both image and extracted text
@@ -287,4 +297,6 @@ def summarize(
         max_workers=max_workers,
         parallel=parallel,
         auto_download=auto_download,
+        input_mode=input_mode,
+        input_type=input_type,
     )

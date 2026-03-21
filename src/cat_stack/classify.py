@@ -48,6 +48,7 @@ def classify(
     description="",
     user_model="gpt-4o",
     mode="image",
+    input_mode=None,
     creativity=None,
     safety=False,
     chain_of_verification=False,
@@ -115,7 +116,14 @@ def classify(
             Kept for backward compatibility.
         description (str): Description of the input data context.
         user_model (str): Model name to use. Default "gpt-4o".
-        mode (str): PDF processing mode:
+        input_mode (str): What you want the model to do with the input. Default None.
+            - None: Auto-select based on file type (text/docx→"text", image→"visual",
+              pdf→uses mode param or "visual")
+            - "text": Classify text content, regardless of source format. For images
+              and scanned PDFs, uses LLM-based OCR to extract text first.
+            - "visual": Classify visual features of images/rendered PDFs. Not
+              compatible with text or DOCX input.
+        mode (str): PDF processing mode (legacy, use input_mode instead):
             - "image" (default): Render pages as images
             - "text": Extract text only
             - "both": Send both image and extracted text
@@ -534,6 +542,11 @@ def classify(
         from .text_functions_ensemble import _detect_input_type
         detected_type = _detect_input_type(input_data)
         if detected_type in ("pdf", "image"):
+            if input_mode == "text":
+                raise ValueError(
+                    "batch_mode=True does not support OCR (input_mode='text' on image/PDF input). "
+                    "Set batch_mode=False to use OCR-based classification."
+                )
             raise ValueError(
                 f"batch_mode=True only supports text input, but detected input type is '{detected_type}'. "
                 "Set batch_mode=False for PDF/image classification."
@@ -678,5 +691,6 @@ def classify(
         multi_label=multi_label,
         categories_per_call=categories_per_call,
         embedding_tiebreaker_state=_embedding_tiebreaker_state,
+        input_mode=input_mode,
     )
     return _maybe_apply_embeddings(result)
