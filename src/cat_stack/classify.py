@@ -98,6 +98,7 @@ def classify(
     min_centroid_size: int = 3,
     multi_label: bool = True,
     categories_per_call: int = None,
+    pilot_test: Union[bool, int] = False,
 ):
     """
     Unified classification function for text, image, and PDF inputs.
@@ -229,6 +230,13 @@ def classify(
             prompt complexity per call and can improve accuracy for large
             category sets (e.g., 20+). Default None (all categories in one call).
             Not supported with batch_mode=True.
+        pilot_test (bool or int): Run a pilot classification on a small random
+            sample before the full run. The user reviews each result and marks
+            it correct or incorrect. If too many are wrong, classification can
+            be cancelled so categories can be refined.
+            - False (default): Skip pilot test.
+            - True: Run pilot test on 10 random items.
+            - int: Run pilot test on that many random items.
 
     Returns:
         pd.DataFrame: Results with classification columns.
@@ -333,6 +341,59 @@ def classify(
                     )
             except Exception:
                 pass  # Non-critical — don't block classification
+
+    # =========================================================================
+    # Pilot test — classify a small sample for user validation
+    # =========================================================================
+    if pilot_test and categories and categories != "auto":
+        from ._pilot_test import run_pilot_test
+
+        pilot_sample_size = pilot_test if isinstance(pilot_test, int) else 10
+
+        # Build kwargs that mirror what classify() passes to classify_ensemble
+        _pilot_ensemble_kwargs = dict(
+            input_description=description,
+            survey_question=survey_question,
+            pdf_mode=mode if mode in ("image", "text", "both") else "image",
+            pdf_dpi=pdf_dpi,
+            creativity=creativity,
+            safety=False,
+            chain_of_thought=chain_of_thought,
+            chain_of_verification=chain_of_verification,
+            step_back_prompt=step_back_prompt,
+            context_prompt=context_prompt,
+            thinking_budget=thinking_budget,
+            use_json_schema=use_json_schema,
+            max_workers=max_workers,
+            parallel=parallel,
+            fail_strategy=fail_strategy,
+            max_retries=max_retries,
+            batch_retries=batch_retries,
+            retry_delay=retry_delay,
+            row_delay=row_delay,
+            auto_download=auto_download,
+            example1=example1,
+            example2=example2,
+            example3=example3,
+            example4=example4,
+            example5=example5,
+            example6=example6,
+            consensus_threshold=consensus_threshold,
+            multi_label=multi_label,
+            input_mode=input_mode,
+        )
+
+        pilot_result = run_pilot_test(
+            input_data=input_data,
+            categories=categories,
+            models=models,
+            classify_ensemble_fn=classify_ensemble,
+            ensemble_kwargs=_pilot_ensemble_kwargs,
+            sample_size=pilot_sample_size,
+        )
+
+        if pilot_result is None or not pilot_result["proceed"]:
+            return None
 
     # =========================================================================
     # Validate categories_per_call
