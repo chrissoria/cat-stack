@@ -17,6 +17,7 @@ Categories are never modified — only the system prompt changes.
 
 from typing import Union
 
+from ._category_analysis import has_other_category
 from ._pilot_test import collect_corrections
 from .text_functions_ensemble import classify_ensemble
 from ._providers import UnifiedLLMClient, detect_provider
@@ -74,6 +75,7 @@ def prompt_tune(
     input_mode: str = None,
     ui: str = "browser",
     optimize: str = "balanced",
+    add_other: Union[str, bool] = "prompt",
 ):
     """
     Automatically optimize the classification prompt using user feedback.
@@ -141,6 +143,11 @@ def prompt_tune(
             "balanced" (default) — average of accuracy, sensitivity, precision.
             "precision" — optimize for precision (minimize false positives).
             "sensitivity" — optimize for sensitivity (minimize false negatives).
+        add_other (str or bool): Controls auto-addition of an "Other" catch-all
+            category when none is detected.
+            - "prompt" (default): Ask the user to accept or reject the suggestion.
+            - True: Silently add "Other" without prompting.
+            - False: Never add "Other".
 
     Returns:
         dict with keys:
@@ -175,6 +182,35 @@ def prompt_tune(
     # Build models list
     if models is None:
         models = [(user_model, model_source, api_key)]
+
+    # Auto-append "Other" catch-all category if missing
+    if add_other and categories and categories != "auto":
+        if not has_other_category(categories):
+            if add_other == "prompt":
+                print(
+                    "\n[CatLLM] It looks like your categories may not include a catch-all\n"
+                    "  'Other' option. Adding one can improve accuracy by giving the\n"
+                    "  model an outlet for ambiguous responses instead of forcing them\n"
+                    "  into ill-fitting categories.\n"
+                    "  (If you already have a catch-all under a different name, choose 'n'.)\n"
+                )
+                try:
+                    answer = input("  Add 'Other' to your categories? (Y/n): ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    answer = "n"
+                if answer in ("", "y", "yes"):
+                    categories = list(categories) + ["Other"]
+                    print(f"  -> Categories are now: {categories}\n")
+                else:
+                    print("  -> Keeping original categories.\n")
+            else:
+                # add_other=True — silently add
+                categories = list(categories) + ["Other"]
+                print(
+                    f"[CatLLM] Auto-added 'Other' catch-all category. "
+                    f"Categories are now: {categories}  "
+                    f"(set add_other=False to disable)"
+                )
 
     # Build ensemble kwargs (shared across all iterations)
     ensemble_kwargs = dict(

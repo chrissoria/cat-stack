@@ -329,6 +329,7 @@ class TestPromptTuneIntegration:
             sample_size=5,
             max_iterations=3,
             ui="terminal",
+            add_other=False,
         )
 
         # Should return the optimized prompt
@@ -362,6 +363,7 @@ class TestPromptTuneIntegration:
             api_key="fake-key",
             sample_size=5,
             ui="terminal",
+            add_other=False,
         )
 
         # No tuning needed → empty prompt, single iteration
@@ -379,6 +381,7 @@ class TestPromptTuneIntegration:
             categories=CATEGORIES,
             api_key="fake-key",
             ui="terminal",
+            add_other=False,
         )
 
         assert result["system_prompt"] == ""
@@ -391,6 +394,7 @@ class TestPromptTuneIntegration:
                 categories=CATEGORIES,
                 api_key="fake-key",
                 optimize="invalid",
+                add_other=False,
             )
 
     @patch("cat_stack.prompt_tune._generate_category_instruction")
@@ -436,6 +440,7 @@ class TestPromptTuneIntegration:
             sample_size=5,
             max_iterations=2,
             ui="terminal",
+            add_other=False,
         )
 
         # Regression should be reverted — prompt may end up empty if all attempts regressed
