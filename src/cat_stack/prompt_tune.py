@@ -78,11 +78,42 @@ def prompt_tune(
     """
     Automatically optimize the classification prompt using user feedback.
 
-    Runs an iterative loop: classify a sample, collect user corrections,
-    then for each category that had errors, ask an LLM to generate a
-    targeted instruction for that category. Per-category instructions are
-    assembled into the system prompt. Categories themselves are never
-    modified.
+    Uses a coordinate-descent approach: one category changes at a time so we
+    can isolate what's helping, while the meta-LLM always sees the full error
+    context across all categories.
+
+    Flow:
+        1. BASELINE — Classify a random sample using the user's raw categories
+           (no system prompt). The user reviews and corrects the model's output.
+           This establishes the starting accuracy.
+
+        2. PER-CATEGORY OPTIMIZATION — For each category that had errors
+           (worst-first), the meta-LLM generates a targeted instruction.
+           It receives ALL errors across ALL categories for full context
+           (e.g. boundary confusion between "Positive" and "Neutral") but
+           is asked to output guidance for only the target category.
+
+           After each instruction is generated, the sample is re-classified
+           to validate improvement:
+             - Improved → keep the instruction, try again if errors remain
+             - No change → try a different wording (up to max_iterations)
+             - Regressed → revert the instruction, try different wording
+
+           Each category gets up to max_iterations attempts before moving on
+           to the next. All other category instructions are held constant.
+
+        3. FINAL ASSESSMENT — Before/after comparison showing baseline vs
+           best metrics, per-category breakdown, and the assembled prompt.
+
+    The output is a system prompt with per-category instructions, e.g.:
+        Classification guidance per category:
+
+        - Neutral: Assign only for factual statements with no emotional valence...
+        - Positive: Assign when the text expresses satisfaction or approval...
+
+    Categories that never had errors are omitted — the model already handles
+    them correctly without extra guidance. Categories themselves are never
+    modified, only the classification instructions change.
 
     Args:
         input_data: The data to classify (list of text strings or pandas Series).
@@ -115,13 +146,13 @@ def prompt_tune(
         dict with keys:
             - "system_prompt": str — the optimized system prompt (best found)
             - "iterations": list of dicts, each with:
-                - "iteration": int
-                - "system_prompt": str — the prompt used
+                - "label": str — e.g. "baseline" or "Neutral attempt 2"
+                - "system_prompt": str — the prompt used for this run
                 - "metrics": dict with "accuracy", "sensitivity", "precision"
                 - "per_category": dict mapping category -> metrics dict
                 - "total_flips": int — total corrections made
-            - "best_iteration": int — which iteration produced the best prompt
-            - "per_category_summary": dict mapping category -> aggregated metrics
+            - "per_category_summary": dict — per-category metrics from the
+                best-scoring iteration
 
     Example:
         >>> import cat_stack as cat
