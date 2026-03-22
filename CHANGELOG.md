@@ -5,6 +5,23 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-03-21
+
+### Added
+- **`prompt_tune()` — Automatic Prompt Optimization (APO)**: Iteratively refines classification prompts using user feedback. Classifies a random sample, opens a browser-based review UI for corrections, then generates per-category instructions to improve accuracy. Uses coordinate-descent: one category at a time, worst-first, with full error context across all categories.
+  - Browser UI (`_review_ui.py`): Self-contained HTML page with checkboxes for toggling category assignments. No external dependencies — uses Python's built-in `http.server` and `webbrowser`.
+  - Terminal fallback (`ui="terminal"`): Text-based correction input for headless environments.
+  - `optimize` parameter: Target metric — `"balanced"` (default, average of accuracy/sensitivity/precision), `"precision"`, or `"sensitivity"`.
+  - `add_other` parameter: Auto-detects missing "Other" catch-all category, matching `classify()` convention.
+  - Returns optimized `system_prompt` string that can be passed directly to `classify(system_prompt=...)`.
+  - Only opens browser once (baseline). Subsequent iterations auto-score against saved ground truth.
+- **`pilot_test` parameter on `classify()`**: Run a pilot classification on a small random sample before the full run. User reviews results and can cancel if accuracy is too low.
+  - `pilot_test=True`: Test on 10 random items. `pilot_test=N`: Test on N items.
+  - Uses the same browser review UI as `prompt_tune()`.
+- **`system_prompt` parameter on `classify()`**: Custom system-level instruction prepended to classification prompts. Use `prompt_tune()` to generate an optimized one.
+
+---
+
 ## [0.2.0] - 2026-03-20
 
 ### Added
