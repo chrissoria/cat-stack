@@ -100,6 +100,10 @@ def classify(
     categories_per_call: int = None,
     pilot_test: Union[bool, int] = False,
     system_prompt: str = "",
+    prompt_tune: Union[bool, int] = False,
+    tune_iterations: int = 3,
+    tune_ui: str = "browser",
+    tune_optimize: str = "balanced",
 ):
     """
     Unified classification function for text, image, and PDF inputs.
@@ -242,6 +246,17 @@ def classify(
             classification prompt. Use prompt_tune() to generate an optimized
             instruction from labeled examples. Takes precedence over
             context_prompt when provided. Default "".
+        prompt_tune (bool or int): Run automatic prompt optimization before the
+            full classification. Classifies a small sample, opens a browser UI
+            for corrections, then generates an optimized system_prompt.
+            - False (default): Skip prompt tuning.
+            - True: Tune on 10 random items.
+            - int: Tune on that many random items.
+            Overrides system_prompt if provided.
+        tune_iterations (int): Max optimization attempts per category. Default 3.
+        tune_ui (str): Review UI for prompt tuning — "browser" or "terminal".
+        tune_optimize (str): Metric to optimize — "balanced", "precision",
+            or "sensitivity". Default "balanced".
 
     Returns:
         pd.DataFrame: Results with classification columns.
@@ -399,6 +414,37 @@ def classify(
 
         if pilot_result is None or not pilot_result["proceed"]:
             return None
+
+    # =========================================================================
+    # Prompt tuning — optimize system_prompt before full classification
+    # =========================================================================
+    if prompt_tune and categories and categories != "auto":
+        from .prompt_tune import prompt_tune as _prompt_tune
+
+        tune_sample_size = prompt_tune if isinstance(prompt_tune, int) else 10
+
+        tune_result = _prompt_tune(
+            input_data=input_data,
+            categories=categories,
+            models=models,
+            description=description,
+            survey_question=survey_question,
+            sample_size=tune_sample_size,
+            max_iterations=tune_iterations,
+            multi_label=multi_label,
+            creativity=creativity,
+            use_json_schema=use_json_schema,
+            consensus_threshold=consensus_threshold,
+            max_retries=max_retries,
+            input_mode=input_mode,
+            ui=tune_ui,
+            optimize=tune_optimize,
+            add_other=False,  # already handled above
+        )
+
+        if tune_result["system_prompt"]:
+            system_prompt = tune_result["system_prompt"]
+            print(f"\n[CatLLM] Using optimized prompt from prompt_tune.\n")
 
     # =========================================================================
     # Validate categories_per_call
