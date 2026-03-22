@@ -145,8 +145,10 @@ def prompt_tune(
         )
     _target_fn = _optimize_fns[optimize]
 
-    # Extract original category names (before any " — " descriptions)
-    original_names = [c.split(" — ")[0].split(" - ")[0].strip() for c in categories]
+    # Store user-supplied categories as the baseline (may already contain
+    # descriptions like "Positive — expresses satisfaction").  These are
+    # preserved and refined — never discarded.
+    user_categories = list(categories)
 
     iterations = []
     current_categories = list(categories)
@@ -224,7 +226,7 @@ def prompt_tune(
         new_categories = _generate_improved_categories(
             corrections=corrections,
             categories=current_categories,
-            original_names=original_names,
+            user_categories=user_categories,
             description=description,
             survey_question=survey_question,
             multi_label=multi_label,
@@ -263,7 +265,7 @@ def prompt_tune(
 def _generate_improved_categories(
     corrections,
     categories,
-    original_names,
+    user_categories,
     description,
     survey_question,
     multi_label,
@@ -275,12 +277,15 @@ def _generate_improved_categories(
 ):
     """
     Use an LLM to analyze classification errors and generate improved category
-    definitions. Category names stay fixed; only descriptions and examples
-    are added or refined.
+    definitions.  Uses positional keys ("1", "2", ...) so category names —
+    even those containing dashes, em-dashes, or other punctuation — are
+    never misinterpreted.
 
     Returns:
         list of str: The improved category definitions, or None on failure.
     """
+    num_cats = len(categories)
+
     # Format the error analysis
     error_lines = []
     correct_lines = []
@@ -308,9 +313,9 @@ def _generate_improved_categories(
     errors_text = "\n".join(error_lines) if error_lines else "(no errors)"
     correct_text = "\n".join(correct_lines) if correct_lines else "(none)"
 
-    # Build current categories display
+    # Build current and user-supplied categories display
     categories_str = "\n".join(f"  {i+1}. {cat}" for i, cat in enumerate(categories))
-    original_names_str = "\n".join(f"  {i+1}. {name}" for i, name in enumerate(original_names))
+    user_cats_str = "\n".join(f"  {i+1}. {cat}" for i, cat in enumerate(user_categories))
     label_mode = "multi-label (multiple categories can apply)" if multi_label else "single-label (exactly one category)"
 
     # Optimization emphasis
@@ -328,26 +333,27 @@ def _generate_improved_categories(
         context_parts.append(f"Survey question: {survey_question}")
     context_text = "\n".join(context_parts) if context_parts else "(no additional context)"
 
-    # Build JSON schema for structured output
-    schema_example = json.dumps(
-        {name: f"{name} — description. Example: ..." for name in original_names[:2]},
-        indent=2,
-    )
+    # Build JSON example using positional keys
+    example_entries = {}
+    for i in range(min(2, num_cats)):
+        example_entries[str(i + 1)] = f"{categories[i].split(chr(8212))[0].rstrip()} — improved description. Example: ..."
+    schema_example = json.dumps(example_entries, indent=2)
 
     meta_prompt = f"""You are an expert at defining classification categories for text analysis.
 
 TASK: Analyze the classification errors below and produce improved category definitions.
-You must keep the exact category NAMES fixed but can add or refine descriptions,
-clarifications, and examples for each category.
+You may add or refine descriptions, clarifications, and examples for each category,
+but the category name at the start of each definition must stay recognizable.
 
 CLASSIFICATION SETUP:
 - Mode: {label_mode}
 - Context: {context_text}
+- Number of categories: {num_cats}
 
-ORIGINAL CATEGORY NAMES (these must stay exactly the same):
-{original_names_str}
+USER-SUPPLIED CATEGORIES (the original definitions the user provided):
+{user_cats_str}
 
-CURRENT CATEGORY DEFINITIONS:
+CURRENT CATEGORY DEFINITIONS (what the model used this iteration):
 {categories_str}
 
 MISCLASSIFIED ITEMS (errors the definitions must fix):
@@ -363,13 +369,13 @@ INSTRUCTIONS:
 1. Analyze what the model is getting wrong — look for patterns in the errors.
    Are certain categories confused? Is the model over- or under-classifying?
 2. For each category, write an improved definition that:
-   - Starts with the exact original category name, followed by " — "
+   - Preserves any useful context from the user-supplied definition
    - Adds a clear description of what belongs in this category
    - Clarifies boundary cases between confused categories
    - Includes 1-2 short examples if helpful
    - Is concise (aim for one line per category)
-3. Return a JSON object mapping each original category name to its improved
-   definition string.
+3. Return a JSON object with keys "1" through "{num_cats}" (the category
+   position numbers) and values being the improved definition strings.
 
 Example format:
 {schema_example}
@@ -402,15 +408,15 @@ Return ONLY the JSON object. No explanation, no preamble, no markdown."""
 
         mapping = json.loads(text)
 
-        # Build new categories list preserving original order
+        # Build new categories list using positional keys
         new_categories = []
-        for name in original_names:
-            if name in mapping:
-                new_categories.append(mapping[name])
+        for i in range(num_cats):
+            key = str(i + 1)
+            if key in mapping:
+                new_categories.append(mapping[key])
             else:
                 # Fallback: keep existing definition
-                idx = original_names.index(name)
-                new_categories.append(categories[idx])
+                new_categories.append(categories[i])
 
         return new_categories
 
