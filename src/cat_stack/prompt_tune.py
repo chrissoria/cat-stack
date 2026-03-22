@@ -95,7 +95,9 @@ def prompt_tune(
         description (str): Description of the input data context.
         survey_question (str): The survey question (provides context).
         sample_size (int): Number of random items to test per iteration. Default 10.
-        max_iterations (int): Maximum optimization iterations. Default 3.
+        max_iterations (int): Maximum instruction attempts per category. Each
+            error category gets up to this many tries to find an instruction
+            that improves it before moving on. Default 3.
         multi_label (bool): Multi-label classification. Default True.
         creativity (float): Temperature setting. None uses model default.
         use_json_schema (bool): Use JSON schema for structured output. Default True.
@@ -181,166 +183,206 @@ def prompt_tune(
         )
     _target_fn = _optimize_fns[optimize]
 
-    iterations = []
     current_prompt = ""
-    # Per-category instructions that accumulate across iterations.
+    # Per-category instructions that accumulate across categories.
     # Maps category name -> instruction string for that category.
     cat_instructions = {}
     best_prompt = ""
     best_target = -1.0
-    best_iteration = 0
-
-    # Accumulators for per-category summary across all iterations
-    agg_per_cat = {cat: {"tp": 0, "fp": 0, "fn": 0, "tn": 0} for cat in categories}
 
     print(f"\n{'=' * 60}")
-    print(f"PROMPT TUNING — up to {max_iterations} iteration(s), {sample_size} sample(s) each")
+    print(f"PROMPT TUNING — {sample_size} sample(s), up to {max_iterations} iteration(s) per category")
     print(f"  Optimizing for: {optimize}")
     print(f"{'=' * 60}")
 
-    for iteration in range(1, max_iterations + 1):
-        print(f"\n--- Iteration {iteration}/{max_iterations} ---")
+    # ── Step 1: Baseline classification + user corrections ───────────
+    print(f"\n--- Baseline (no prompt) ---")
+    print("  Current prompt: (default — no custom instruction)\n")
 
-        if current_prompt:
-            display_prompt = current_prompt
-            if len(display_prompt) > 200:
-                display_prompt = display_prompt[:200] + "..."
-            print(f"  Current prompt: {display_prompt}\n")
-        else:
-            print("  Current prompt: (default — no custom instruction)\n")
+    result = collect_corrections(
+        input_data=input_data,
+        categories=categories,
+        models=models,
+        classify_ensemble_fn=classify_ensemble,
+        ensemble_kwargs=ensemble_kwargs,
+        sample_size=sample_size,
+        system_prompt=current_prompt,
+        ui=ui,
+    )
 
-        # Step 1: Classify sample and collect corrections
-        result = collect_corrections(
-            input_data=input_data,
-            categories=categories,
-            models=models,
-            classify_ensemble_fn=classify_ensemble,
-            ensemble_kwargs=ensemble_kwargs,
-            sample_size=sample_size,
-            system_prompt=current_prompt,
-            ui=ui,
-        )
-
-        if result is None:
-            print("\n[CatLLM] Prompt tuning cancelled.")
-            break
-
-        corrections = result["corrections"]
-        metrics = result["metrics"]
-        total_flips = result["total_flips"]
-        target_score = _target_fn(metrics)
-
-        # Per-category metrics for this iteration
-        per_cat = _compute_per_category_metrics(corrections, categories)
-
-        # Accumulate into summary
-        for cat in categories:
-            for key in ("tp", "fp", "fn", "tn"):
-                agg_per_cat[cat][key] += per_cat[cat][key]
-
-        # Print iteration summary
-        print(f"\n  Iteration {iteration} results:")
-        print(f"    Overall:  acc={metrics['accuracy']:.0%}  sens={metrics['sensitivity']:.0%}  prec={metrics['precision']:.0%}  flips={total_flips}")
-        print()
-        print(f"    {'Category':<40s}  {'Acc':>5s}  {'Sens':>5s}  {'Prec':>5s}  {'FP':>3s}  {'FN':>3s}")
-        print(f"    {chr(9472) * 40}  {chr(9472) * 5}  {chr(9472) * 5}  {chr(9472) * 5}  {chr(9472) * 3}  {chr(9472) * 3}")
-        for cat in categories:
-            d = per_cat[cat]
-            cat_display = cat if len(cat) <= 40 else cat[:37] + "..."
-            print(
-                f"    {cat_display:<40s}  {d['accuracy']:>4.0%}  {d['sensitivity']:>4.0%}"
-                f"  {d['precision']:>4.0%}  {d['fp']:>3d}  {d['fn']:>3d}"
-            )
-
-        iterations.append({
-            "iteration": iteration,
-            "system_prompt": current_prompt,
-            "metrics": metrics,
-            "per_category": per_cat,
-            "total_flips": total_flips,
-        })
-
-        # Track best
-        if target_score > best_target:
-            best_target = target_score
-            best_prompt = current_prompt
-            best_iteration = iteration
-
-        # Perfect score — no need to continue
-        if total_flips == 0:
-            print("\n  All classifications correct — no further tuning needed.")
-            break
-
-        # Last iteration — don't generate a new prompt
-        if iteration == max_iterations:
-            print(f"\n  Reached max iterations ({max_iterations}).")
-            break
-
-        # Step 2: Pick the worst-performing category and generate an instruction
-        # for it. Only one category changes per iteration so we can isolate
-        # what's helping. The meta-LLM sees ALL errors for full context.
-        cats_with_errors = [
-            cat for cat in categories
-            if per_cat[cat]["fp"] > 0 or per_cat[cat]["fn"] > 0
-        ]
-        if not cats_with_errors:
-            break
-
-        # Rank by total errors (FP + FN), pick the worst
-        worst_cat = max(
-            cats_with_errors,
-            key=lambda c: per_cat[c]["fp"] + per_cat[c]["fn"],
-        )
-        worst_errors = per_cat[worst_cat]["fp"] + per_cat[worst_cat]["fn"]
-
-        print(f"\n  Targeting: {worst_cat} ({worst_errors} errors)")
-
-        instruction = _generate_category_instruction(
-            target_category=worst_cat,
-            corrections=corrections,
-            categories=categories,
-            per_cat=per_cat,
-            current_instruction=cat_instructions.get(worst_cat, ""),
-            description=description,
-            survey_question=survey_question,
-            multi_label=multi_label,
-            optimize=optimize,
-            meta_model=meta_model,
-            meta_source=meta_source,
-            meta_key=meta_key,
-            max_retries=max_retries,
-        )
-        if instruction:
-            cat_instructions[worst_cat] = instruction
-            print(f"    Updated: {instruction}")
-        else:
-            print(f"    Failed to generate instruction (keeping previous)")
-
-        # Assemble per-category instructions into system prompt
-        current_prompt = _assemble_prompt(cat_instructions, categories)
-
-    # Build per-category summary from accumulated counts
-    per_category_summary = {}
-    for cat in categories:
-        d = agg_per_cat[cat]
-        total = d["tp"] + d["fp"] + d["fn"] + d["tn"]
-        per_category_summary[cat] = {
-            "tp": d["tp"], "fp": d["fp"], "fn": d["fn"], "tn": d["tn"],
-            "accuracy": (d["tp"] + d["tn"]) / total if total > 0 else 1.0,
-            "sensitivity": d["tp"] / (d["tp"] + d["fn"]) if (d["tp"] + d["fn"]) > 0 else 1.0,
-            "precision": d["tp"] / (d["tp"] + d["fp"]) if (d["tp"] + d["fp"]) > 0 else 1.0,
+    if result is None:
+        print("\n[CatLLM] Prompt tuning cancelled.")
+        return {
+            "system_prompt": "",
+            "iterations": [],
+            "best_iteration": 0,
+            "per_category_summary": {},
         }
+
+    corrections = result["corrections"]
+    metrics = result["metrics"]
+    total_flips = result["total_flips"]
+    baseline_target = _target_fn(metrics)
+
+    # Per-category metrics from baseline
+    per_cat = _compute_per_category_metrics(corrections, categories)
+
+    # Print baseline summary
+    _print_classification_summary("Baseline", metrics, per_cat, categories, total_flips)
+
+    baseline_data = {
+        "label": "baseline",
+        "system_prompt": "",
+        "metrics": metrics,
+        "per_category": per_cat,
+        "total_flips": total_flips,
+    }
+    iterations = [baseline_data]
+
+    best_target = baseline_target
+    best_prompt = ""
+
+    if total_flips == 0:
+        print("\n  All classifications correct — no tuning needed.")
+    else:
+        # ── Step 2: Iterate through each error category ──────────────
+        cats_with_errors = sorted(
+            [cat for cat in categories if per_cat[cat]["fp"] > 0 or per_cat[cat]["fn"] > 0],
+            key=lambda c: per_cat[c]["fp"] + per_cat[c]["fn"],
+            reverse=True,
+        )
+
+        print(f"\n  Categories with errors ({len(cats_with_errors)}): {', '.join(cats_with_errors)}")
+
+        for cat_idx, target_cat in enumerate(cats_with_errors, 1):
+            cat_errors = per_cat[target_cat]["fp"] + per_cat[target_cat]["fn"]
+            print(f"\n{'─' * 60}")
+            print(f"  Category {cat_idx}/{len(cats_with_errors)}: {target_cat} ({cat_errors} errors)")
+            print(f"  Up to {max_iterations} iteration(s)")
+
+            prev_instruction = cat_instructions.get(target_cat, "")
+
+            for attempt in range(1, max_iterations + 1):
+                print(f"\n    Attempt {attempt}/{max_iterations}...")
+
+                instruction = _generate_category_instruction(
+                    target_category=target_cat,
+                    corrections=corrections,
+                    categories=categories,
+                    per_cat=per_cat,
+                    current_instruction=cat_instructions.get(target_cat, ""),
+                    description=description,
+                    survey_question=survey_question,
+                    multi_label=multi_label,
+                    optimize=optimize,
+                    meta_model=meta_model,
+                    meta_source=meta_source,
+                    meta_key=meta_key,
+                    max_retries=max_retries,
+                )
+
+                if not instruction:
+                    print(f"    Failed to generate instruction — skipping")
+                    break
+
+                # Apply this instruction and re-classify
+                cat_instructions[target_cat] = instruction
+                current_prompt = _assemble_prompt(cat_instructions, categories)
+
+                print(f"    Instruction: {instruction}")
+                print(f"    Re-classifying...")
+
+                result = collect_corrections(
+                    input_data=input_data,
+                    categories=categories,
+                    models=models,
+                    classify_ensemble_fn=classify_ensemble,
+                    ensemble_kwargs=ensemble_kwargs,
+                    sample_size=sample_size,
+                    system_prompt=current_prompt,
+                    ui=ui,
+                )
+
+                if result is None:
+                    print("\n[CatLLM] Prompt tuning cancelled.")
+                    # Revert this category
+                    if prev_instruction:
+                        cat_instructions[target_cat] = prev_instruction
+                    else:
+                        cat_instructions.pop(target_cat, None)
+                    current_prompt = _assemble_prompt(cat_instructions, categories)
+                    break
+
+                corrections = result["corrections"]
+                metrics = result["metrics"]
+                total_flips = result["total_flips"]
+                target_score = _target_fn(metrics)
+                per_cat = _compute_per_category_metrics(corrections, categories)
+
+                new_cat_errors = per_cat[target_cat]["fp"] + per_cat[target_cat]["fn"]
+
+                _print_classification_summary(
+                    f"{target_cat} attempt {attempt}", metrics, per_cat, categories, total_flips,
+                )
+
+                iterations.append({
+                    "label": f"{target_cat} attempt {attempt}",
+                    "system_prompt": current_prompt,
+                    "metrics": metrics,
+                    "per_category": per_cat,
+                    "total_flips": total_flips,
+                })
+
+                # Track best overall
+                if target_score > best_target:
+                    best_target = target_score
+                    best_prompt = current_prompt
+
+                # Check improvement for this category
+                if new_cat_errors < cat_errors:
+                    print(f"    Improved: {target_cat} errors {cat_errors} -> {new_cat_errors}")
+                    prev_instruction = instruction
+                    cat_errors = new_cat_errors
+                    if new_cat_errors == 0:
+                        print(f"    {target_cat}: all errors fixed!")
+                        break
+                    # Continue trying if there are remaining errors and attempts left
+                elif new_cat_errors == cat_errors:
+                    print(f"    No change for {target_cat} ({cat_errors} errors)")
+                    # Instruction didn't help — try again with a different one
+                else:
+                    print(f"    Regressed: {target_cat} errors {cat_errors} -> {new_cat_errors}")
+                    # Revert this attempt
+                    if prev_instruction:
+                        cat_instructions[target_cat] = prev_instruction
+                    else:
+                        cat_instructions.pop(target_cat, None)
+                    current_prompt = _assemble_prompt(cat_instructions, categories)
+
+                if total_flips == 0:
+                    print("\n  All classifications correct — stopping early!")
+                    break
+
+            if total_flips == 0:
+                break
+
+    # ── Step 3: Final validation ─────────────────────────────────────
+    # Assemble the final prompt and record it
+    current_prompt = _assemble_prompt(cat_instructions, categories)
+    if not best_prompt and current_prompt:
+        best_prompt = current_prompt
+
+    # Find the best iteration by target score
+    best_iter_data = max(iterations, key=lambda it: _target_fn(it["metrics"]))
 
     # Final summary with before/after comparison
     print(f"\n{'=' * 60}")
     print(f"PROMPT TUNING COMPLETE")
-    print(f"  Iterations run:  {len(iterations)}")
-    print(f"  Best iteration:  {best_iteration}")
-    print(f"  Optimized for:   {optimize}")
+    print(f"  Classification runs:  {len(iterations)}")
+    print(f"  Optimized for:        {optimize}")
 
     if len(iterations) >= 2:
-        baseline = iterations[0]  # Iteration 1: user's original categories, no prompt
-        best_iter_data = iterations[best_iteration - 1]
+        baseline = iterations[0]
 
         b = baseline["metrics"]
         f_ = best_iter_data["metrics"]
@@ -349,7 +391,7 @@ def prompt_tune(
             diff = after - before
             return f"+{diff:.0%}" if diff >= 0 else f"{diff:.0%}"
 
-        print(f"\n  Before vs After (iteration 1 vs best):")
+        print(f"\n  Before vs After (baseline vs best):")
         print(f"    {'Metric':<12s}  {'Baseline':>8s}  {'Best':>8s}  {'Change':>8s}")
         print(f"    {chr(9472) * 12}  {chr(9472) * 8}  {chr(9472) * 8}  {chr(9472) * 8}")
         for metric_name in ("accuracy", "sensitivity", "precision"):
@@ -395,9 +437,24 @@ def prompt_tune(
     return {
         "system_prompt": best_prompt,
         "iterations": iterations,
-        "best_iteration": best_iteration,
-        "per_category_summary": per_category_summary,
+        "per_category_summary": best_iter_data["per_category"],
     }
+
+
+def _print_classification_summary(label, metrics, per_cat, categories, total_flips):
+    """Print a compact classification summary table."""
+    print(f"\n  {label} results:")
+    print(f"    Overall:  acc={metrics['accuracy']:.0%}  sens={metrics['sensitivity']:.0%}  prec={metrics['precision']:.0%}  flips={total_flips}")
+    print()
+    print(f"    {'Category':<40s}  {'Acc':>5s}  {'Sens':>5s}  {'Prec':>5s}  {'FP':>3s}  {'FN':>3s}")
+    print(f"    {chr(9472) * 40}  {chr(9472) * 5}  {chr(9472) * 5}  {chr(9472) * 5}  {chr(9472) * 3}  {chr(9472) * 3}")
+    for cat in categories:
+        d = per_cat[cat]
+        cat_display = cat if len(cat) <= 40 else cat[:37] + "..."
+        print(
+            f"    {cat_display:<40s}  {d['accuracy']:>4.0%}  {d['sensitivity']:>4.0%}"
+            f"  {d['precision']:>4.0%}  {d['fp']:>3d}  {d['fn']:>3d}"
+        )
 
 
 def _assemble_prompt(cat_instructions, categories):
