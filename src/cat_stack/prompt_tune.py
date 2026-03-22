@@ -276,34 +276,45 @@ def prompt_tune(
             print(f"\n  Reached max iterations ({max_iterations}).")
             break
 
-        # Step 2: For each category with errors, generate a targeted instruction
-        print("\n  Generating per-category instructions...")
+        # Step 2: Pick the worst-performing category and generate an instruction
+        # for it. Only one category changes per iteration so we can isolate
+        # what's helping. The meta-LLM sees ALL errors for full context.
         cats_with_errors = [
             cat for cat in categories
             if per_cat[cat]["fp"] > 0 or per_cat[cat]["fn"] > 0
         ]
+        if not cats_with_errors:
+            break
 
-        for cat in cats_with_errors:
-            instruction = _generate_category_instruction(
-                category=cat,
-                per_cat_metrics=per_cat[cat],
-                corrections=corrections,
-                categories=categories,
-                current_instruction=cat_instructions.get(cat, ""),
-                description=description,
-                survey_question=survey_question,
-                multi_label=multi_label,
-                optimize=optimize,
-                meta_model=meta_model,
-                meta_source=meta_source,
-                meta_key=meta_key,
-                max_retries=max_retries,
-            )
-            if instruction:
-                cat_instructions[cat] = instruction
-                print(f"    {cat}: updated")
-            else:
-                print(f"    {cat}: failed (keeping previous)")
+        # Rank by total errors (FP + FN), pick the worst
+        worst_cat = max(
+            cats_with_errors,
+            key=lambda c: per_cat[c]["fp"] + per_cat[c]["fn"],
+        )
+        worst_errors = per_cat[worst_cat]["fp"] + per_cat[worst_cat]["fn"]
+
+        print(f"\n  Targeting: {worst_cat} ({worst_errors} errors)")
+
+        instruction = _generate_category_instruction(
+            target_category=worst_cat,
+            corrections=corrections,
+            categories=categories,
+            per_cat=per_cat,
+            current_instruction=cat_instructions.get(worst_cat, ""),
+            description=description,
+            survey_question=survey_question,
+            multi_label=multi_label,
+            optimize=optimize,
+            meta_model=meta_model,
+            meta_source=meta_source,
+            meta_key=meta_key,
+            max_retries=max_retries,
+        )
+        if instruction:
+            cat_instructions[worst_cat] = instruction
+            print(f"    Updated: {instruction}")
+        else:
+            print(f"    Failed to generate instruction (keeping previous)")
 
         # Assemble per-category instructions into system prompt
         current_prompt = _assemble_prompt(cat_instructions, categories)
@@ -373,10 +384,10 @@ def _assemble_prompt(cat_instructions, categories):
 
 
 def _generate_category_instruction(
-    category,
-    per_cat_metrics,
+    target_category,
     corrections,
     categories,
+    per_cat,
     current_instruction,
     description,
     survey_question,
@@ -388,50 +399,73 @@ def _generate_category_instruction(
     max_retries,
 ):
     """
-    Generate a targeted instruction for a single category based on its errors.
+    Generate a targeted instruction for one category, given full error context.
 
-    Sends the meta-LLM only the errors relevant to this category and asks
-    for a concise instruction that would fix them.
+    The meta-LLM sees ALL errors across ALL categories so it understands the
+    full picture (e.g. boundary confusion between categories), but is asked
+    to produce an instruction only for the target category.
 
     Returns:
-        str: A one-or-two sentence instruction for this category, or None.
+        str: A one-or-two sentence instruction for the target category, or None.
     """
-    fp = per_cat_metrics["fp"]
-    fn = per_cat_metrics["fn"]
-
-    # Collect examples relevant to this category's errors
-    fp_examples = []
-    fn_examples = []
-    correct_examples = []
+    # Build full error context across all categories
+    all_error_lines = []
+    target_fp_examples = []
+    target_fn_examples = []
+    target_correct_examples = []
 
     for item in corrections:
         input_text = str(item["input"])
         if len(input_text) > 200:
             input_text = input_text[:200] + "..."
 
-        orig = item["original"][category]
-        truth = item["corrected"][category]
+        # Full context: all errors for this item
+        if item["changed"]:
+            entry = f'Text: "{input_text}"\n'
+            for cat in item["changed"]:
+                orig = item["original"][cat]
+                corr = item["corrected"][cat]
+                marker = " <<<" if cat == target_category else ""
+                entry += f"    - {cat}: model={orig}, correct={corr}{marker}\n"
+            all_error_lines.append(entry)
 
+        # Target category specifics
+        orig = item["original"][target_category]
+        truth = item["corrected"][target_category]
         if orig == 1 and truth == 0:
-            fp_examples.append(f'  - "{input_text}" (model said 1, should be 0)')
+            target_fp_examples.append(f'  - "{input_text}"')
         elif orig == 0 and truth == 1:
-            fn_examples.append(f'  - "{input_text}" (model said 0, should be 1)')
+            target_fn_examples.append(f'  - "{input_text}"')
         elif orig == truth:
-            correct_examples.append(f'  - "{input_text}" = {orig}')
+            target_correct_examples.append(f'  - "{input_text}" = {orig}')
 
-    # Build the focused prompt
-    error_section = ""
-    if fp_examples:
-        error_section += f"FALSE POSITIVES ({fp} — model wrongly assigned this category):\n"
-        error_section += "\n".join(fp_examples) + "\n\n"
-    if fn_examples:
-        error_section += f"FALSE NEGATIVES ({fn} — model missed this category):\n"
-        error_section += "\n".join(fn_examples) + "\n\n"
+    all_errors_text = "\n".join(all_error_lines) if all_error_lines else "(no errors)"
 
-    correct_section = ""
-    if correct_examples:
-        correct_section = "CORRECTLY CLASSIFIED (preserve these):\n"
-        correct_section += "\n".join(correct_examples[:5]) + "\n\n"
+    # Target category error summary
+    target_section = f'ERRORS FOR "{target_category}" SPECIFICALLY:\n'
+    fp = per_cat[target_category]["fp"]
+    fn = per_cat[target_category]["fn"]
+    if target_fp_examples:
+        target_section += f"  False positives ({fp} — model wrongly assigned this category):\n"
+        target_section += "\n".join(target_fp_examples) + "\n"
+    if target_fn_examples:
+        target_section += f"  False negatives ({fn} — model missed this category):\n"
+        target_section += "\n".join(target_fn_examples) + "\n"
+    if target_correct_examples:
+        target_section += f"  Correct ({len(target_correct_examples)} — preserve these):\n"
+        target_section += "\n".join(target_correct_examples[:5]) + "\n"
+
+    # Per-category metrics summary
+    metrics_lines = []
+    for cat in categories:
+        d = per_cat[cat]
+        errors = d["fp"] + d["fn"]
+        marker = " <<<" if cat == target_category else ""
+        metrics_lines.append(
+            f"    {cat}: acc={d['accuracy']:.0%} sens={d['sensitivity']:.0%} "
+            f"prec={d['precision']:.0%} (FP={d['fp']}, FN={d['fn']}){marker}"
+        )
+    metrics_text = "\n".join(metrics_lines)
 
     # Context
     context_parts = []
@@ -441,11 +475,7 @@ def _generate_category_instruction(
         context_parts.append(f"Question: {survey_question}")
     context_text = "; ".join(context_parts) if context_parts else ""
 
-    # Other categories for boundary context
-    other_cats = [c for c in categories if c != category]
-    other_cats_str = ", ".join(other_cats) if other_cats else "(none)"
-
-    # Current instruction for this category
+    # Current instruction
     current_text = f'\nCURRENT INSTRUCTION FOR THIS CATEGORY:\n"{current_instruction}"\n' if current_instruction else ""
 
     optimize_guidance = {
@@ -454,12 +484,23 @@ def _generate_category_instruction(
         "sensitivity": " Focus especially on reducing false negatives.",
     }
 
-    meta_prompt = f"""You are writing a classification guideline for the category "{category}".
+    meta_prompt = f"""You are improving a text classification system. Your job is to write an
+instruction for the category "{target_category}" that fixes its errors.
 {f"Context: {context_text}" if context_text else ""}
-Other categories in the scheme: {other_cats_str}
 {"Multi-label: a text can belong to multiple categories." if multi_label else "Single-label: each text belongs to exactly one category."}
+
+PER-CATEGORY PERFORMANCE:
+{metrics_text}
+
+ALL ERRORS ACROSS ALL CATEGORIES (<<< marks errors involving your target):
+{all_error_lines and chr(10).join(all_error_lines) or "(no errors)"}
+
+{target_section}
 {current_text}
-{error_section}{correct_section}Write a 1-2 sentence instruction that tells a classifier when to assign or not assign the category "{category}". Address the specific errors above — clarify what distinguishes this category from others and what should NOT be included.{optimize_guidance[optimize]}
+Write a 1-2 sentence instruction for the category "{target_category}" that tells
+a classifier when to assign and when NOT to assign it. Use the full error context
+above to understand how this category relates to others, but only output guidance
+for "{target_category}".{optimize_guidance[optimize]}
 
 Return ONLY the instruction. No preamble, no quotes, no formatting."""
 
@@ -477,12 +518,12 @@ Return ONLY the instruction. No preamble, no quotes, no formatting."""
         )
 
         if error:
-            print(f"    [CatLLM] Error for {category}: {error}")
+            print(f"    [CatLLM] Error for {target_category}: {error}")
             return None
 
         instruction = reply.strip().strip('"').strip("'")
         return instruction
 
     except Exception as e:
-        print(f"    [CatLLM] Failed for {category}: {e}")
+        print(f"    [CatLLM] Failed for {target_category}: {e}")
         return None
