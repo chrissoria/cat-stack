@@ -31,8 +31,9 @@ images/generate_classify_diagram.py
 src/catllm/old_code/
 src/catllm/circle_classifier.py
 
-# Test files and test directory (top-level only)
-/tests/
+# Test output and data (keep test scripts tracked)
+/tests/output/
+/tests/data/
 
 # Survey summarizer (separate project)
 survey-summarizer
