@@ -1,22 +1,49 @@
 """
-Automatic Category Optimization for CatLLM.
+Iterative category testing for CatLLM (prompt_tune).
 
-Iteratively refines category definitions by:
-1. Classifying a random sample with the current categories
-2. Collecting category-level user corrections
-3. Asking an LLM to analyze the errors and produce enriched category
-   descriptions (keeping names fixed)
-4. Re-classifying with the improved categories
-5. Keeping the best-scoring category set
-6. Repeating until convergence or max iterations
+Runs the user's categories through repeated classify → correct cycles
+on fresh random samples each iteration. Categories are never modified —
+the value is in the per-category diagnostic metrics that show which
+categories the model handles well and which it struggles with.
 """
 
-import json
 from typing import Union
 
 from ._pilot_test import collect_corrections
 from .text_functions_ensemble import classify_ensemble
-from ._providers import UnifiedLLMClient, detect_provider
+
+
+def _compute_per_category_metrics(corrections, categories):
+    """
+    Compute per-category TP/FP/FN/TN and derived metrics.
+
+    Returns:
+        dict mapping category name → {"tp", "fp", "fn", "tn",
+        "accuracy", "sensitivity", "precision"}.
+    """
+    per_cat = {cat: {"tp": 0, "fp": 0, "fn": 0, "tn": 0} for cat in categories}
+
+    for c in corrections:
+        for cat in categories:
+            orig = c["original"][cat]
+            truth = c["corrected"][cat]
+            if orig == 1 and truth == 1:
+                per_cat[cat]["tp"] += 1
+            elif orig == 1 and truth == 0:
+                per_cat[cat]["fp"] += 1
+            elif orig == 0 and truth == 1:
+                per_cat[cat]["fn"] += 1
+            else:
+                per_cat[cat]["tn"] += 1
+
+    for cat in categories:
+        d = per_cat[cat]
+        total = d["tp"] + d["fp"] + d["fn"] + d["tn"]
+        d["accuracy"] = (d["tp"] + d["tn"]) / total if total > 0 else 1.0
+        d["sensitivity"] = d["tp"] / (d["tp"] + d["fn"]) if (d["tp"] + d["fn"]) > 0 else 1.0
+        d["precision"] = d["tp"] / (d["tp"] + d["fp"]) if (d["tp"] + d["fp"]) > 0 else 1.0
+
+    return per_cat
 
 
 def prompt_tune(
@@ -40,19 +67,16 @@ def prompt_tune(
     optimize: str = "balanced",
 ):
     """
-    Automatically optimize category definitions using user feedback.
+    Iteratively test categories against random samples and collect corrections.
 
-    Runs an iterative loop: classify a sample, collect user corrections, ask
-    an LLM to analyze the errors and enrich the category descriptions, then
-    re-classify to verify improvement. Returns the best category definitions.
-
-    Category names are kept fixed — only descriptions and examples are added
-    or refined. This avoids overfitting to the small sample while improving
-    the model's understanding of what each category means.
+    Each iteration draws a fresh random sample, classifies it with the user's
+    exact categories (unchanged), and collects per-category user corrections.
+    Per-category metrics are reported so the user can see which categories
+    the model handles well and which need better definitions.
 
     Args:
         input_data: The data to classify (list of text strings or pandas Series).
-        categories (list): List of category names for classification.
+        categories (list): List of category names/definitions for classification.
         api_key (str): API key for the model provider (single-model mode).
         user_model (str): Model name to use. Default "gpt-4o".
         model_source (str): Provider. Default "auto".
@@ -61,7 +85,7 @@ def prompt_tune(
         description (str): Description of the input data context.
         survey_question (str): The survey question (provides context).
         sample_size (int): Number of random items to test per iteration. Default 10.
-        max_iterations (int): Maximum optimization iterations. Default 3.
+        max_iterations (int): Maximum iterations. Default 3.
         multi_label (bool): Multi-label classification. Default True.
         creativity (float): Temperature setting. None uses model default.
         use_json_schema (bool): Use JSON schema for structured output. Default True.
@@ -70,20 +94,22 @@ def prompt_tune(
         input_mode (str): Input mode override. Default None (auto-detect).
         ui (str): Review interface for corrections. "browser" (default) opens
             a local web page with checkboxes. "terminal" uses text-based input.
-        optimize (str): Which metric to maximize across iterations.
+        optimize (str): Which metric to highlight in the summary.
             "balanced" (default) — average of accuracy, sensitivity, precision.
-            "precision" — optimize for precision (minimize false positives).
-            "sensitivity" — optimize for sensitivity (minimize false negatives).
+            "precision" — focus on precision.
+            "sensitivity" — focus on sensitivity.
 
     Returns:
         dict with keys:
-            - "categories": list of str — the optimized category definitions
+            - "categories": list of str — the user's original categories (unchanged)
             - "iterations": list of dicts, each with:
                 - "iteration": int
-                - "categories": list of str — categories used
                 - "metrics": dict with "accuracy", "sensitivity", "precision"
+                - "per_category": dict mapping category → metrics dict
                 - "total_flips": int — total corrections made
-            - "best_iteration": int — which iteration produced the best categories
+            - "best_iteration": int — which iteration had the best target score
+            - "per_category_summary": dict mapping category → aggregated metrics
+              across all iterations
 
     Example:
         >>> import cat_stack as cat
@@ -95,13 +121,9 @@ def prompt_tune(
         ...     sample_size=10,
         ...     max_iterations=3,
         ... )
-        >>> print(result["categories"])
-        >>> # Use the optimized categories for full classification
-        >>> results = cat.classify(
-        ...     input_data=df['responses'],
-        ...     categories=result["categories"],
-        ...     api_key="your-api-key",
-        ... )
+        >>> # See which categories need work
+        >>> for cat_name, m in result["per_category_summary"].items():
+        ...     print(f"{cat_name}: acc={m['accuracy']:.0%} sens={m['sensitivity']:.0%} prec={m['precision']:.0%}")
     """
     # Build models list
     if models is None:
@@ -128,11 +150,6 @@ def prompt_tune(
         input_mode=input_mode,
     )
 
-    # Pick the model/key to use for the meta-optimization LLM calls
-    meta_model, meta_source, meta_key = models[0]
-    if meta_source == "auto":
-        meta_source = detect_provider(meta_model)
-
     # Resolve optimization target to a scoring function
     _optimize_fns = {
         "balanced": lambda m: (m["accuracy"] + m["sensitivity"] + m["precision"]) / 3,
@@ -145,36 +162,29 @@ def prompt_tune(
         )
     _target_fn = _optimize_fns[optimize]
 
-    # Store user-supplied categories as the baseline (may already contain
-    # descriptions like "Positive — expresses satisfaction").  These are
-    # preserved and refined — never discarded.
-    user_categories = list(categories)
-
     iterations = []
-    current_categories = list(categories)
-    best_categories = list(categories)
     best_target = -1.0
     best_iteration = 0
 
+    # Accumulators for per-category summary across all iterations
+    agg_per_cat = {cat: {"tp": 0, "fp": 0, "fn": 0, "tn": 0} for cat in categories}
+
     print(f"\n{'=' * 60}")
-    print(f"CATEGORY TUNING — up to {max_iterations} iteration(s), {sample_size} sample(s) each")
-    print(f"  Optimizing for: {optimize}")
+    print(f"PROMPT TUNE — {max_iterations} iteration(s), {sample_size} sample(s) each")
+    print(f"  Metric focus: {optimize}")
+    print(f"  Categories:")
+    for i, cat in enumerate(categories, 1):
+        cat_display = cat if len(cat) <= 65 else cat[:62] + "..."
+        print(f"    {i}. {cat_display}")
     print(f"{'=' * 60}")
 
     for iteration in range(1, max_iterations + 1):
         print(f"\n--- Iteration {iteration}/{max_iterations} ---")
 
-        # Show current categories
-        print("  Categories:")
-        for i, cat in enumerate(current_categories, 1):
-            cat_display = cat if len(cat) <= 70 else cat[:67] + "..."
-            print(f"    {i}. {cat_display}")
-        print()
-
-        # Step 1: Classify sample and collect corrections
+        # Classify a fresh random sample and collect corrections
         result = collect_corrections(
             input_data=input_data,
-            categories=current_categories,
+            categories=categories,
             models=models,
             classify_ensemble_fn=classify_ensemble,
             ensemble_kwargs=ensemble_kwargs,
@@ -183,7 +193,7 @@ def prompt_tune(
         )
 
         if result is None:
-            print("\n[CatLLM] Category tuning cancelled.")
+            print("\n[CatLLM] Prompt tune cancelled.")
             break
 
         corrections = result["corrections"]
@@ -191,238 +201,75 @@ def prompt_tune(
         total_flips = result["total_flips"]
         target_score = _target_fn(metrics)
 
+        # Per-category metrics for this iteration
+        per_cat = _compute_per_category_metrics(corrections, categories)
+
+        # Accumulate into summary
+        for cat in categories:
+            for key in ("tp", "fp", "fn", "tn"):
+                agg_per_cat[cat][key] += per_cat[cat][key]
+
         # Print iteration summary
         print(f"\n  Iteration {iteration} results:")
-        print(f"    Accuracy:    {metrics['accuracy'] * 100:.1f}%")
-        print(f"    Sensitivity: {metrics['sensitivity'] * 100:.1f}%")
-        print(f"    Precision:   {metrics['precision'] * 100:.1f}%")
-        print(f"    Corrections: {total_flips}")
+        print(f"    Overall:  acc={metrics['accuracy']:.0%}  sens={metrics['sensitivity']:.0%}  prec={metrics['precision']:.0%}  flips={total_flips}")
+        print()
+        print(f"    {'Category':<40s}  {'Acc':>5s}  {'Sens':>5s}  {'Prec':>5s}  {'FP':>3s}  {'FN':>3s}")
+        print(f"    {'─' * 40}  {'─' * 5}  {'─' * 5}  {'─' * 5}  {'─' * 3}  {'─' * 3}")
+        for cat in categories:
+            d = per_cat[cat]
+            cat_display = cat if len(cat) <= 40 else cat[:37] + "..."
+            print(
+                f"    {cat_display:<40s}  {d['accuracy']:>4.0%}  {d['sensitivity']:>4.0%}"
+                f"  {d['precision']:>4.0%}  {d['fp']:>3d}  {d['fn']:>3d}"
+            )
 
         iterations.append({
             "iteration": iteration,
-            "categories": list(current_categories),
             "metrics": metrics,
+            "per_category": per_cat,
             "total_flips": total_flips,
         })
 
         # Track best
         if target_score > best_target:
             best_target = target_score
-            best_categories = list(current_categories)
             best_iteration = iteration
 
         # Perfect score — no need to continue
         if total_flips == 0:
-            print("\n  All classifications correct — no further tuning needed.")
+            print("\n  All classifications correct — no further iterations needed.")
             break
 
-        # Last iteration — don't generate new categories
-        if iteration == max_iterations:
-            print(f"\n  Reached max iterations ({max_iterations}).")
-            break
-
-        # Step 2: Generate improved categories via meta-LLM call
-        print("\n  Generating improved category definitions...")
-        new_categories = _generate_improved_categories(
-            corrections=corrections,
-            categories=current_categories,
-            user_categories=user_categories,
-            description=description,
-            survey_question=survey_question,
-            multi_label=multi_label,
-            optimize=optimize,
-            meta_model=meta_model,
-            meta_source=meta_source,
-            meta_key=meta_key,
-            max_retries=max_retries,
-        )
-
-        if new_categories is None:
-            print("  Failed to generate improved categories. Stopping.")
-            break
-
-        current_categories = new_categories
+    # Build per-category summary from accumulated counts
+    per_category_summary = {}
+    for cat in categories:
+        d = agg_per_cat[cat]
+        total = d["tp"] + d["fp"] + d["fn"] + d["tn"]
+        per_category_summary[cat] = {
+            "tp": d["tp"], "fp": d["fp"], "fn": d["fn"], "tn": d["tn"],
+            "accuracy": (d["tp"] + d["tn"]) / total if total > 0 else 1.0,
+            "sensitivity": d["tp"] / (d["tp"] + d["fn"]) if (d["tp"] + d["fn"]) > 0 else 1.0,
+            "precision": d["tp"] / (d["tp"] + d["fp"]) if (d["tp"] + d["fp"]) > 0 else 1.0,
+        }
 
     # Final summary
     print(f"\n{'=' * 60}")
-    print(f"CATEGORY TUNING COMPLETE")
-    print(f"  Iterations run:  {len(iterations)}")
-    print(f"  Best iteration:  {best_iteration}")
-    print(f"  Optimized for:   {optimize}")
-    print(f"  Best target:     {best_target * 100:.1f}%")
-    print(f"\n  Optimized categories:")
-    for i, cat in enumerate(best_categories, 1):
-        print(f"    {i}. {cat}")
+    print(f"PROMPT TUNE COMPLETE — {len(iterations)} iteration(s)")
+    print(f"\n  Aggregated per-category results:")
+    print(f"    {'Category':<40s}  {'Acc':>5s}  {'Sens':>5s}  {'Prec':>5s}  {'FP':>3s}  {'FN':>3s}")
+    print(f"    {'─' * 40}  {'─' * 5}  {'─' * 5}  {'─' * 5}  {'─' * 3}  {'─' * 3}")
+    for cat in categories:
+        d = per_category_summary[cat]
+        cat_display = cat if len(cat) <= 40 else cat[:37] + "..."
+        print(
+            f"    {cat_display:<40s}  {d['accuracy']:>4.0%}  {d['sensitivity']:>4.0%}"
+            f"  {d['precision']:>4.0%}  {d['fp']:>3d}  {d['fn']:>3d}"
+        )
     print(f"{'=' * 60}\n")
 
     return {
-        "categories": best_categories,
+        "categories": list(categories),
         "iterations": iterations,
         "best_iteration": best_iteration,
+        "per_category_summary": per_category_summary,
     }
-
-
-def _generate_improved_categories(
-    corrections,
-    categories,
-    user_categories,
-    description,
-    survey_question,
-    multi_label,
-    optimize,
-    meta_model,
-    meta_source,
-    meta_key,
-    max_retries,
-):
-    """
-    Use an LLM to analyze classification errors and generate improved category
-    definitions.  Uses positional keys ("1", "2", ...) so category names —
-    even those containing dashes, em-dashes, or other punctuation — are
-    never misinterpreted.
-
-    Returns:
-        list of str: The improved category definitions, or None on failure.
-    """
-    num_cats = len(categories)
-
-    # Format the error analysis
-    error_lines = []
-    correct_lines = []
-
-    for item in corrections:
-        input_text = str(item["input"])
-        if len(input_text) > 300:
-            input_text = input_text[:300] + "..."
-
-        if item["changed"]:
-            entry = f'Text: "{input_text}"\n'
-            entry += "  Model output vs correct:\n"
-            for cat in item["changed"]:
-                orig = item["original"][cat]
-                corr = item["corrected"][cat]
-                entry += f"    - {cat}: model said {orig}, should be {corr}\n"
-            error_lines.append(entry)
-        else:
-            entry = f'Text: "{input_text}"\n'
-            entry += "  Classification: "
-            assigned = [cat for cat, val in item["corrected"].items() if val == 1]
-            entry += ", ".join(assigned) if assigned else "(none)"
-            correct_lines.append(entry)
-
-    errors_text = "\n".join(error_lines) if error_lines else "(no errors)"
-    correct_text = "\n".join(correct_lines) if correct_lines else "(none)"
-
-    # Build current and user-supplied categories display
-    categories_str = "\n".join(f"  {i+1}. {cat}" for i, cat in enumerate(categories))
-    user_cats_str = "\n".join(f"  {i+1}. {cat}" for i, cat in enumerate(user_categories))
-    label_mode = "multi-label (multiple categories can apply)" if multi_label else "single-label (exactly one category)"
-
-    # Optimization emphasis
-    optimize_guidance = {
-        "balanced": "Balance accuracy, sensitivity, and precision equally.",
-        "precision": "Prioritize precision — add constraints that reduce false positives (model assigning 1 when it should be 0).",
-        "sensitivity": "Prioritize sensitivity — add guidance that reduces false negatives (model assigning 0 when it should be 1).",
-    }
-
-    # Context
-    context_parts = []
-    if description:
-        context_parts.append(f"Data description: {description}")
-    if survey_question:
-        context_parts.append(f"Survey question: {survey_question}")
-    context_text = "\n".join(context_parts) if context_parts else "(no additional context)"
-
-    # Build JSON example using positional keys
-    example_entries = {}
-    for i in range(min(2, num_cats)):
-        example_entries[str(i + 1)] = f"{categories[i].split(chr(8212))[0].rstrip()} — improved description. Example: ..."
-    schema_example = json.dumps(example_entries, indent=2)
-
-    meta_prompt = f"""You are an expert at defining classification categories for text analysis.
-
-TASK: Analyze the classification errors below and produce improved category definitions.
-You may add or refine descriptions, clarifications, and examples for each category,
-but the category name at the start of each definition must stay recognizable.
-
-CLASSIFICATION SETUP:
-- Mode: {label_mode}
-- Context: {context_text}
-- Number of categories: {num_cats}
-
-USER-SUPPLIED CATEGORIES (the original definitions the user provided):
-{user_cats_str}
-
-CURRENT CATEGORY DEFINITIONS (what the model used this iteration):
-{categories_str}
-
-MISCLASSIFIED ITEMS (errors the definitions must fix):
-{errors_text}
-
-CORRECTLY CLASSIFIED ITEMS (definitions must preserve these):
-{correct_text}
-
-OPTIMIZATION TARGET:
-{optimize_guidance[optimize]}
-
-INSTRUCTIONS:
-1. Analyze what the model is getting wrong — look for patterns in the errors.
-   Are certain categories confused? Is the model over- or under-classifying?
-2. For each category, write an improved definition that:
-   - Preserves any useful context from the user-supplied definition
-   - Adds a clear description of what belongs in this category
-   - Clarifies boundary cases between confused categories
-   - Includes 1-2 short examples if helpful
-   - Is concise (aim for one line per category)
-3. Return a JSON object with keys "1" through "{num_cats}" (the category
-   position numbers) and values being the improved definition strings.
-
-Example format:
-{schema_example}
-
-Return ONLY the JSON object. No explanation, no preamble, no markdown."""
-
-    try:
-        client = UnifiedLLMClient(
-            provider=meta_source,
-            api_key=meta_key,
-            model=meta_model,
-        )
-
-        reply, error = client.complete(
-            messages=[{"role": "user", "content": meta_prompt}],
-            force_json=False,
-            max_retries=max_retries,
-        )
-
-        if error:
-            print(f"  [CatLLM] Meta-prompt error: {error}")
-            return None
-
-        # Clean up and parse
-        text = reply.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            lines = [l for l in lines if not l.strip().startswith("```")]
-            text = "\n".join(lines).strip()
-
-        mapping = json.loads(text)
-
-        # Build new categories list using positional keys
-        new_categories = []
-        for i in range(num_cats):
-            key = str(i + 1)
-            if key in mapping:
-                new_categories.append(mapping[key])
-            else:
-                # Fallback: keep existing definition
-                new_categories.append(categories[i])
-
-        return new_categories
-
-    except json.JSONDecodeError as e:
-        print(f"  [CatLLM] Could not parse LLM response as JSON: {e}")
-        return None
-    except Exception as e:
-        print(f"  [CatLLM] Failed to generate improved categories: {e}")
-        return None
