@@ -331,23 +331,59 @@ def prompt_tune(
             "precision": d["tp"] / (d["tp"] + d["fp"]) if (d["tp"] + d["fp"]) > 0 else 1.0,
         }
 
-    # Final summary
+    # Final summary with before/after comparison
     print(f"\n{'=' * 60}")
     print(f"PROMPT TUNING COMPLETE")
     print(f"  Iterations run:  {len(iterations)}")
     print(f"  Best iteration:  {best_iteration}")
     print(f"  Optimized for:   {optimize}")
-    print(f"  Best target:     {best_target * 100:.1f}%")
-    print(f"\n  Aggregated per-category results:")
-    print(f"    {'Category':<40s}  {'Acc':>5s}  {'Sens':>5s}  {'Prec':>5s}  {'FP':>3s}  {'FN':>3s}")
-    print(f"    {chr(9472) * 40}  {chr(9472) * 5}  {chr(9472) * 5}  {chr(9472) * 5}  {chr(9472) * 3}  {chr(9472) * 3}")
-    for cat in categories:
-        d = per_category_summary[cat]
-        cat_display = cat if len(cat) <= 40 else cat[:37] + "..."
+
+    if len(iterations) >= 2:
+        baseline = iterations[0]  # Iteration 1: user's original categories, no prompt
+        best_iter_data = iterations[best_iteration - 1]
+
+        b = baseline["metrics"]
+        f_ = best_iter_data["metrics"]
+
+        def _delta(after, before):
+            diff = after - before
+            return f"+{diff:.0%}" if diff >= 0 else f"{diff:.0%}"
+
+        print(f"\n  Before vs After (iteration 1 vs best):")
+        print(f"    {'Metric':<12s}  {'Baseline':>8s}  {'Best':>8s}  {'Change':>8s}")
+        print(f"    {chr(9472) * 12}  {chr(9472) * 8}  {chr(9472) * 8}  {chr(9472) * 8}")
+        for metric_name in ("accuracy", "sensitivity", "precision"):
+            print(
+                f"    {metric_name:<12s}  {b[metric_name]:>7.0%}  {f_[metric_name]:>7.0%}"
+                f"  {_delta(f_[metric_name], b[metric_name]):>8s}"
+            )
         print(
-            f"    {cat_display:<40s}  {d['accuracy']:>4.0%}  {d['sensitivity']:>4.0%}"
-            f"  {d['precision']:>4.0%}  {d['fp']:>3d}  {d['fn']:>3d}"
+            f"    {'errors':<12s}  {baseline['total_flips']:>8d}  {best_iter_data['total_flips']:>8d}"
+            f"  {best_iter_data['total_flips'] - baseline['total_flips']:>+8d}"
         )
+
+        # Per-category before/after
+        print(f"\n  Per-category change (baseline -> best):")
+        print(f"    {'Category':<30s}  {'Acc':>11s}  {'Sens':>11s}  {'Prec':>11s}  {'Err':>8s}")
+        print(f"    {chr(9472) * 30}  {chr(9472) * 11}  {chr(9472) * 11}  {chr(9472) * 11}  {chr(9472) * 8}")
+        for cat in categories:
+            b_cat = baseline["per_category"][cat]
+            f_cat = best_iter_data["per_category"][cat]
+            b_err = b_cat["fp"] + b_cat["fn"]
+            f_err = f_cat["fp"] + f_cat["fn"]
+            cat_display = cat if len(cat) <= 30 else cat[:27] + "..."
+            print(
+                f"    {cat_display:<30s}"
+                f"  {b_cat['accuracy']:.0%}->{f_cat['accuracy']:.0%}"
+                f"  {b_cat['sensitivity']:.0%}->{f_cat['sensitivity']:.0%}"
+                f"  {b_cat['precision']:.0%}->{f_cat['precision']:.0%}"
+                f"  {b_err}->{f_err}"
+            )
+    else:
+        b = iterations[0]["metrics"] if iterations else {}
+        if b:
+            print(f"\n  Results:  acc={b['accuracy']:.0%}  sens={b['sensitivity']:.0%}  prec={b['precision']:.0%}")
+
     if best_prompt:
         print(f"\n  Optimized prompt:")
         for line in best_prompt.split("\n"):
