@@ -255,6 +255,12 @@ def prompt_tune(
     total_flips = result["total_flips"]
     baseline_target = _target_fn(metrics)
 
+    # Save ground truth from user corrections for auto-scoring later iterations
+    sample_indices = result["sample_indices"]
+    ground_truth = {
+        i: c["corrected"] for i, c in zip(sample_indices, corrections)
+    }
+
     # Per-category metrics from baseline
     per_cat = _compute_per_category_metrics(corrections, categories)
 
@@ -323,19 +329,19 @@ def prompt_tune(
                 print(f"    Instruction: {instruction}")
                 print(f"    Re-classifying...")
 
-                result = collect_corrections(
+                result = _classify_and_score(
                     input_data=input_data,
                     categories=categories,
                     models=models,
                     classify_ensemble_fn=classify_ensemble,
                     ensemble_kwargs=ensemble_kwargs,
-                    sample_size=sample_size,
+                    sample_indices=sample_indices,
+                    ground_truth=ground_truth,
                     system_prompt=current_prompt,
-                    ui=ui,
                 )
 
                 if result is None:
-                    print("\n[CatLLM] Prompt tuning cancelled.")
+                    print("\n[CatLLM] Re-classification failed.")
                     # Revert this category
                     if prev_instruction:
                         cat_instructions[target_cat] = prev_instruction
@@ -469,6 +475,96 @@ def prompt_tune(
         "system_prompt": best_prompt,
         "iterations": iterations,
         "per_category_summary": best_iter_data["per_category"],
+    }
+
+
+def _classify_and_score(
+    input_data,
+    categories,
+    models,
+    classify_ensemble_fn,
+    ensemble_kwargs,
+    sample_indices,
+    ground_truth,
+    system_prompt="",
+):
+    """
+    Re-classify the same sample items and auto-score against saved ground truth.
+
+    No browser UI — the user's corrections from the baseline are reused as the
+    answer key.
+
+    Returns:
+        Same format as collect_corrections() return value, or None on failure.
+    """
+    import pandas as pd
+    from ._pilot_test import compute_metrics
+
+    # Get the same items that were used in the baseline
+    if isinstance(input_data, pd.Series):
+        items_list = input_data.tolist()
+    else:
+        items_list = list(input_data)
+
+    sample_items = [items_list[i] for i in sample_indices]
+
+    # Run classification
+    kwargs = dict(ensemble_kwargs)
+    kwargs["filename"] = None
+    kwargs["save_directory"] = None
+    kwargs["progress_callback"] = None
+    kwargs["input_data"] = sample_items
+    kwargs["categories"] = categories
+    kwargs["models"] = models
+    if system_prompt:
+        kwargs["system_prompt"] = system_prompt
+
+    try:
+        pilot_result = classify_ensemble_fn(**kwargs)
+    except Exception as e:
+        print(f"    [CatLLM] Classification failed: {e}")
+        return None
+
+    is_multi_model = len(models) > 1
+
+    # Extract model predictions and score against ground truth
+    corrections = []
+    for row_idx, sample_idx in enumerate(sample_indices):
+        row = pilot_result.iloc[row_idx]
+        input_text = sample_items[row_idx]
+        truth = ground_truth[sample_idx]
+
+        original = {}
+        for cat_idx, cat in enumerate(categories, 1):
+            if is_multi_model:
+                col = f"category_{cat_idx}_consensus"
+            else:
+                col = f"category_{cat_idx}"
+
+            val = 0
+            if col in pilot_result.columns:
+                raw = row[col]
+                if raw is not None and str(raw) == "1":
+                    val = 1
+            original[cat] = val
+
+        changed = [cat for cat in categories if original[cat] != truth[cat]]
+
+        corrections.append({
+            "input": input_text,
+            "original": original,
+            "corrected": truth,
+            "changed": changed,
+        })
+
+    total_flips = sum(len(c["changed"]) for c in corrections)
+    metrics = compute_metrics(corrections)
+
+    return {
+        "corrections": corrections,
+        "metrics": metrics,
+        "total_flips": total_flips,
+        "sample_indices": sample_indices,
     }
 
 

@@ -298,21 +298,26 @@ class TestPromptTuneIntegration:
     """
 
     @patch("cat_stack.prompt_tune._generate_category_instruction")
+    @patch("cat_stack.prompt_tune._classify_and_score")
     @patch("cat_stack.prompt_tune.collect_corrections")
-    def test_full_flow_improvement(self, mock_collect, mock_gen_instr):
-        # Call 1 (baseline): returns corrections with errors
+    def test_full_flow_improvement(self, mock_collect, mock_score, mock_gen_instr):
+        # Baseline (collect_corrections): returns corrections with errors
         baseline_result = {
             "corrections": CORRECTIONS_WITH_ERRORS,
             "metrics": {"accuracy": 0.6, "sensitivity": 0.6, "precision": 0.6},
             "total_flips": 2,
+            "sample_indices": [0, 1, 2, 3, 4],
         }
-        # Call 2 (after first instruction): all fixed
+        mock_collect.return_value = baseline_result
+
+        # Iteration re-classification (_classify_and_score): all fixed
         fixed_result = {
             "corrections": CORRECTIONS_FIXED,
             "metrics": {"accuracy": 1.0, "sensitivity": 1.0, "precision": 1.0},
             "total_flips": 0,
+            "sample_indices": [0, 1, 2, 3, 4],
         }
-        mock_collect.side_effect = [baseline_result, fixed_result]
+        mock_score.return_value = fixed_result
 
         # Meta-LLM returns an instruction for the first error category
         mock_gen_instr.return_value = "Assign only for factual statements with no emotional valence."
@@ -347,6 +352,7 @@ class TestPromptTuneIntegration:
             "corrections": CORRECTIONS_PERFECT,
             "metrics": {"accuracy": 1.0, "sensitivity": 1.0, "precision": 1.0},
             "total_flips": 0,
+            "sample_indices": [0, 1, 2, 3, 4],
         }
         mock_collect.return_value = perfect_result
 
@@ -388,14 +394,18 @@ class TestPromptTuneIntegration:
             )
 
     @patch("cat_stack.prompt_tune._generate_category_instruction")
+    @patch("cat_stack.prompt_tune._classify_and_score")
     @patch("cat_stack.prompt_tune.collect_corrections")
-    def test_regression_reverts_instruction(self, mock_collect, mock_gen_instr):
+    def test_regression_reverts_instruction(self, mock_collect, mock_score, mock_gen_instr):
         # Baseline: 2 errors
         baseline_result = {
             "corrections": CORRECTIONS_WITH_ERRORS,
             "metrics": {"accuracy": 0.6, "sensitivity": 0.6, "precision": 0.6},
             "total_flips": 2,
+            "sample_indices": [0, 1, 2, 3, 4],
         }
+        mock_collect.return_value = baseline_result
+
         # After instruction: worse (3 errors via extra FP on Positive)
         worse_corrections = []
         for c in CORRECTIONS_WITH_ERRORS:
@@ -413,10 +423,10 @@ class TestPromptTuneIntegration:
             "corrections": worse_corrections,
             "metrics": {"accuracy": 0.5, "sensitivity": 0.5, "precision": 0.5},
             "total_flips": 3,
+            "sample_indices": [0, 1, 2, 3, 4],
         }
 
-        mock_collect.side_effect = [baseline_result, worse_result, worse_result, worse_result,
-                                     worse_result, worse_result, worse_result]
+        mock_score.return_value = worse_result
         mock_gen_instr.return_value = "Bad instruction."
 
         result = prompt_tune(
