@@ -5,6 +5,20 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-03-21
+
+### Added
+- **`prompt_tune` parameter on `classify()`**: Inline prompt optimization — runs
+  `prompt_tune()` on a subsample before the full classification, then passes the
+  optimized `system_prompt` automatically.
+  - `prompt_tune=True`: Tune on 10 random items (default sample size).
+  - `prompt_tune=N`: Tune on N random items.
+  - `tune_iterations`, `tune_ui`, `tune_optimize` control the tuning behavior.
+  - Tested on UCNets a19i data: **+5 pp** cell-level accuracy (89.8% → 94.8%)
+    on 100 rows with Haiku 3.0, tuning on just 15 items.
+
+---
+
 ## [0.3.0] - 2026-03-21
 
 ### Added
