@@ -762,6 +762,24 @@ def explore_common_categories(
     # Second-pass semantic merge prompt
     seed_list = result["Category"].head(max_categories * 3).tolist()
 
+    if specificity == "specific":
+        name_instruction = (
+            "Keep category names DETAILED and DESCRIPTIVE with examples. "
+            "Each category name MUST include a brief clarifying phrase using "
+            "'such as' or parenthetical examples. For example:\n"
+            "   - 'Residential Zoning Changes (e.g., rezoning parcels, density adjustments)'\n"
+            "   - 'Construction Contract Extensions (e.g., timeline amendments, scope changes)'\n"
+            "   - 'Environmental Compliance (e.g., stormwater regulations, habitat protections)'\n"
+            "Do NOT use short generic labels like 'Zoning' or 'Contracts'. "
+            "Every category must be specific enough that a reader immediately "
+            "understands what types of documents belong in it."
+        )
+    else:
+        name_instruction = (
+            "Keep category names broad and general. "
+            "Use the most frequent or clearest label when merging."
+        )
+
     second_prompt = f"""
 You are a data analyst reviewing categorized text data.
 
@@ -774,9 +792,8 @@ Critical Instructions:
    - "breakup/household conflict" = "relationship problems"
 3) When merging:
    - Combine frequencies mentally
-   - Keep the most frequent OR clearest label
    - Each concept appears ONLY ONCE
-4) Keep category names {specificity}.
+4) {name_instruction}
 5) Return ONLY a numbered list of {max_categories} categories. No extra text.
 
 Pre-processed Categories (sorted by frequency, top sample):

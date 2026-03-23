@@ -5,6 +5,30 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] - 2026-03-23
+
+### Added
+- **Image summarization**: `summarize()` now supports image file inputs (`.jpg`, `.png`, etc.)
+  with visual analysis via multimodal LLMs. Previously images only worked with `classify()`.
+- **HuggingFace router suffix support**: Model names can now include a router suffix
+  (e.g., `qwen/qwen3-vl-235b-a22b-instruct:novita`) to route requests to a specific
+  HuggingFace Inference Provider (novita, together, sambanova, cerebras, fireworks).
+  The suffix is automatically stripped from the model name before API calls.
+- **`explore()` specificity improvement**: When `specificity="specific"`, category names now
+  include detailed descriptions with examples (e.g., parenthetical clarifications) instead
+  of bare labels.
+
+### Fixed
+- **`summarize()` JSON extraction**: Replaced `extract_json()` (which strips spaces, brackets,
+  and newlines — fine for classification 0/1 output but destructive for freeform summary text)
+  with a new `_extract_json_for_summary()` that preserves content. Also strips `<think>` tags
+  from thinking models (Qwen3, DeepSeek).
+- **`summarize()` array responses**: `extract_summary_from_json()` now handles models that
+  return bullet-point summaries as JSON arrays (`{"summary": ["- point 1", "- point 2"]}`)
+  instead of a single string.
+
+---
+
 ## [1.0.0] - 2026-03-22
 
 ### Notes

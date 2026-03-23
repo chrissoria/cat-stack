@@ -36,18 +36,59 @@ __all__ = [
 # HuggingFace Endpoint Auto-Detection
 # =============================================================================
 
+def _parse_hf_model_suffix(model: str) -> tuple:
+    """
+    Parse a HuggingFace model name that may have a :router suffix.
+
+    Examples:
+        "Qwen/Qwen3-VL-235B:novita" -> ("Qwen/Qwen3-VL-235B", "novita")
+        "meta-llama/Llama-3-8B" -> ("meta-llama/Llama-3-8B", None)
+
+    Returns:
+        (clean_model_name, router_name_or_None)
+    """
+    # Only treat the last segment after ':' as a router suffix if the model
+    # contains a '/' (org/model format) to avoid confusing with Ollama tags
+    if ":" in model and "/" in model:
+        parts = model.rsplit(":", 1)
+        suffix = parts[1].lower()
+        # Known HuggingFace inference provider routers
+        if suffix in ("novita", "together", "sambanova", "cerebras", "fireworks"):
+            return parts[0], suffix
+    return model, None
+
+
+# Known router suffix -> endpoint mapping
+_HF_ROUTER_ENDPOINTS = {
+    "novita": "https://router.huggingface.co/novita/v3/openai",
+    "together": "https://router.huggingface.co/together/v1",
+    "sambanova": "https://router.huggingface.co/sambanova/v1",
+    "cerebras": "https://router.huggingface.co/cerebras/v1",
+    "fireworks": "https://router.huggingface.co/fireworks/v1",
+}
+
+
 def _detect_huggingface_endpoint(api_key: str, model: str) -> str:
     """
     Test which HuggingFace endpoint works for this model.
-    Tries generic router first, then Together.
+
+    If the model name has a router suffix (e.g., ":novita"), route directly
+    to that provider's endpoint. Otherwise tries generic router, then Together.
 
     Args:
         api_key: HuggingFace API key
-        model: Model name to test
+        model: Model name to test (may include :router suffix)
 
     Returns:
         Base URL for the working endpoint (without /chat/completions)
     """
+    clean_model, router = _parse_hf_model_suffix(model)
+
+    # If explicit router suffix, use that endpoint directly
+    if router and router in _HF_ROUTER_ENDPOINTS:
+        return _HF_ROUTER_ENDPOINTS[router]
+
+    # Otherwise auto-detect
     endpoints = [
         "https://router.huggingface.co/v1/chat/completions",
         "https://router.huggingface.co/together/v1/chat/completions",
@@ -59,7 +100,7 @@ def _detect_huggingface_endpoint(api_key: str, model: str) -> str:
     }
 
     payload = {
-        "model": model,
+        "model": clean_model,
         "messages": [{"role": "user", "content": "hi"}],
         "max_tokens": 5
     }
@@ -145,13 +186,19 @@ class UnifiedLLMClient:
     def __init__(self, provider: str, api_key: str, model: str):
         self.provider = provider.lower()
         self.api_key = api_key
-        self.model = model
+
+        # Strip router suffix from model name and detect endpoint
+        clean_model, router = _parse_hf_model_suffix(model)
+        self.model = clean_model if self.provider == "huggingface" else model
 
         # Auto-detect HuggingFace endpoint
         if self.provider == "huggingface":
             detected_url = _detect_huggingface_endpoint(api_key, model)
             if "together" in detected_url:
                 self.provider = "huggingface-together"
+            elif router and router in _HF_ROUTER_ENDPOINTS:
+                # Use the router-specific endpoint as a custom provider config
+                self._custom_endpoint = _HF_ROUTER_ENDPOINTS[router] + "/chat/completions"
 
         if self.provider not in PROVIDER_CONFIG:
             raise ValueError(f"Unsupported provider: {provider}. "
@@ -161,7 +208,8 @@ class UnifiedLLMClient:
 
     def _get_endpoint(self) -> str:
         """Get the API endpoint, substituting model if needed."""
-        endpoint = self.config["endpoint"]
+        # Use custom endpoint if set (e.g., for HuggingFace router suffixes)
+        endpoint = getattr(self, "_custom_endpoint", None) or self.config["endpoint"]
         if "{model}" in endpoint:
             endpoint = endpoint.format(model=self.model)
         return endpoint

@@ -1313,6 +1313,38 @@ Provide concise summaries that capture essential information.
     return messages
 
 
+def _extract_json_for_summary(reply: str) -> str:
+    """Extract JSON from model reply without destroying freeform text content.
+
+    Unlike extract_json() (designed for classification 0/1 values), this
+    preserves spaces, brackets, and newlines inside string values.
+    """
+    if reply is None:
+        return '{"summary": ""}'
+
+    # Strip thinking tags if present (Qwen3, DeepSeek, etc.)
+    import re as _re
+    reply = _re.sub(r'<think>.*?</think>', '', reply, flags=_re.DOTALL).strip()
+
+    # Find JSON object using recursive regex (regex module imported at top of file)
+    try:
+        extracted = regex.findall(r'\{(?:[^{}]|(?R))*\}', reply, regex.DOTALL)
+        if extracted:
+            return extracted[0]
+    except Exception:
+        pass
+
+    # Fallback: try simple JSON parse
+    try:
+        import json
+        json.loads(reply)
+        return reply
+    except Exception:
+        pass
+
+    return '{"summary": ""}'
+
+
 def extract_summary_from_json(json_str: str) -> tuple:
     """
     Extract summary from JSON response.
@@ -1329,6 +1361,11 @@ def extract_summary_from_json(json_str: str) -> tuple:
             summary = data["summary"]
             if isinstance(summary, str) and summary.strip():
                 return True, summary.strip()
+            elif isinstance(summary, list):
+                # Model returned summary as a list of strings (e.g., bullet points)
+                joined = "\n".join(str(s) for s in summary if s)
+                if joined.strip():
+                    return True, joined.strip()
         return False, None
     except (json.JSONDecodeError, TypeError):
         return False, None
@@ -1743,6 +1780,117 @@ def _prepare_page_data(
 # =============================================================================
 # Image-Specific Functions
 # =============================================================================
+
+def build_image_summarization_prompt(
+    image_data: dict,
+    input_description: str = "",
+    summary_instructions: str = "",
+    max_length: int = None,
+    focus: str = None,
+    provider: str = "openai",
+    chain_of_thought: bool = False,
+    context_prompt: bool = False,
+    step_back_prompt: bool = False,
+    stepback_insights: dict = None,
+    model_name: str = None,
+) -> list:
+    """
+    Build the summarization prompt for an image.
+
+    Parallel to build_pdf_summarization_prompt() but for standalone images.
+
+    Args:
+        image_data: Dict from _prepare_image_data() containing:
+            - encoded_image: Base64 encoded image
+            - extension: Image file extension (without dot)
+        input_description: Description of what the images contain
+        summary_instructions: Specific instructions (e.g., format/tone)
+        max_length: Maximum summary length in words
+        focus: What to focus on in the summary
+        provider: Provider name for format-specific handling
+        chain_of_thought: Whether to use step-by-step reasoning
+        context_prompt: Whether to add expert context prefix
+        step_back_prompt: Whether step-back prompting is enabled
+        stepback_insights: Dict of step-back insights per model
+        model_name: Current model name (for step-back lookup)
+
+    Returns:
+        List of message dicts for the LLM (format varies by provider)
+    """
+    focus_instruction = f", focusing on {focus}" if focus else ""
+    length_instruction = f"\n\nKeep the summary under {max_length} words." if max_length else ""
+    custom_instructions = f"\n\nAdditional instructions: {summary_instructions}" if summary_instructions else ""
+
+    if chain_of_thought:
+        base_text = f"""You are an image summarization assistant.
+Task: Examine the attached image and provide a concise summary{focus_instruction}.
+
+{f'Image context: {input_description}' if input_description else ''}
+
+Let's analyze step by step:
+1. First, identify the main subject and visual elements in the image
+2. Then, extract the key information, text, or message conveyed
+3. Finally, synthesize into a concise summary{length_instruction}{custom_instructions}
+
+Provide your answer in JSON format: {{"summary": "your summary here"}}"""
+    else:
+        base_text = f"""You are an image summarization assistant.
+Task: Examine the attached image and provide a concise summary{focus_instruction}.
+
+{f'Image context: {input_description}' if input_description else ''}{length_instruction}{custom_instructions}
+
+Provide your answer in JSON format: {{"summary": "your summary here"}}"""
+
+    if context_prompt:
+        context = """You are an expert at analyzing and describing visual content.
+Focus on accuracy, key details, and any text visible in the image.
+
+"""
+        base_text = context + base_text
+
+    messages = []
+
+    if step_back_prompt and stepback_insights and model_name in stepback_insights:
+        sb_question, sb_insight = stepback_insights[model_name]
+        messages.append({"role": "user", "content": sb_question})
+        messages.append({"role": "assistant", "content": sb_insight})
+
+    encoded = image_data.get("encoded_image", "")
+    ext = image_data.get("extension", "png")
+
+    if provider == "anthropic":
+        content = [
+            {"type": "text", "text": base_text},
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": f"image/{ext}",
+                    "data": encoded
+                }
+            }
+        ]
+        messages.append({"role": "user", "content": content})
+    elif provider == "google":
+        content = [
+            {"type": "text", "text": base_text},
+            {
+                "type": "inline_data",
+                "mime_type": f"image/{ext}",
+                "data": encoded
+            }
+        ]
+        messages.append({"role": "user", "content": content})
+    else:
+        encoded_url = f"data:image/{ext};base64,{encoded}"
+        content = [
+            {"type": "text", "text": base_text},
+            {"type": "image_url", "image_url": {"url": encoded_url, "detail": "high"}}
+        ]
+        messages.append({"role": "user", "content": content})
+
+    return messages
+
 
 def build_image_classification_prompt(
     image_data: dict,
@@ -3774,13 +3922,72 @@ def summarize_ensemble(
                     return (model_name, '{"summary": ""}', error)
 
                 # Extract JSON from response
-                json_str = extract_json(response)
+                json_str = _extract_json_for_summary(response)
 
                 return (model_name, json_str, None)
 
             except Exception as e:
                 error_msg = str(e)
                 return (model_name, '{"summary": ""}', error_msg)
+
+        elif is_image_mode and isinstance(item, tuple) and len(item) == 2:
+            # IMAGE MODE: item is (image_path, image_label)
+            image_path, image_label = item
+
+            try:
+                image_data = _prepare_image_data(image_path, image_label)
+                if image_data.get("error"):
+                    return (model_name, '{"summary": ""}', image_data["error"])
+
+                messages = build_image_summarization_prompt(
+                    image_data=image_data,
+                    input_description=input_description,
+                    summary_instructions=summary_instructions,
+                    max_length=max_length,
+                    focus=focus,
+                    provider=cfg["provider"],
+                    chain_of_thought=chain_of_thought,
+                    context_prompt=context_prompt,
+                    step_back_prompt=step_back_prompt,
+                    stepback_insights=stepback_insights,
+                    model_name=model_name,
+                )
+
+                client = UnifiedLLMClient(
+                    provider=cfg["provider"],
+                    api_key=cfg["api_key"],
+                    model=cfg["model"],
+                )
+
+                json_schema = json_schemas[model_name]
+                effective_thinking = thinking_budget if cfg["provider"] in ("google", "openai", "anthropic", "huggingface", "huggingface-together") else None
+
+                if cfg["provider"] == "google":
+                    response = _call_google_multimodal(
+                        client=client,
+                        messages=messages,
+                        json_schema=json_schema,
+                        creativity=creativity,
+                        thinking_budget=effective_thinking or 0,
+                        max_retries=max_retries,
+                    )
+                else:
+                    response, error = client.complete(
+                        messages=messages,
+                        json_schema=json_schema,
+                        creativity=creativity,
+                        thinking_budget=effective_thinking,
+                        max_retries=max_retries,
+                    )
+
+                if error:
+                    return (model_name, '{"summary": ""}', error)
+
+                json_str = _extract_json_for_summary(response)
+                return (model_name, json_str, None)
+
+            except Exception as e:
+                return (model_name, '{"summary": ""}', str(e))
 
         else:
             # TEXT MODE: Original text handling
@@ -3827,7 +4034,7 @@ def summarize_ensemble(
                     return (model_name, '{"summary": ""}', error)
 
                 # Extract JSON from response
-                json_str = extract_json(response)
+                json_str = _extract_json_for_summary(response)
 
                 return (model_name, json_str, None)
 
@@ -4162,7 +4369,7 @@ Provide your answer in JSON format: {{"summary": "your synthesized summary"}}"""
             max_retries=max_retries,
         )
 
-        json_str = extract_json(response)
+        json_str = _extract_json_for_summary(response)
         is_valid, summary = extract_summary_from_json(json_str)
 
         if is_valid:
