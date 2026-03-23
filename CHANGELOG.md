@@ -5,6 +5,13 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-03-22
+
+### Fixed
+- **`summarize()` error handling**: Fixed a bug where `summarize_single_item()` ignored the error return from `client.complete()` in both the text and PDF code paths. The error was stored as `_err` (unused variable) instead of being checked, causing failed API calls to silently return empty summaries instead of being detected as failures. This meant the batch retry logic (2 additional passes × 5 retries each) never fired for summarization failures. Now properly checks `if error:` and returns the error, enabling the full retry pipeline (up to 15 total attempts per item).
+
+---
+
 ## [0.4.0] - 2026-03-21
 
 ### Added

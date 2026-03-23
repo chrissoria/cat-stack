@@ -3756,13 +3756,16 @@ def summarize_ensemble(
                         max_retries=max_retries,
                     )
                 else:
-                    response, _err = client.complete(
+                    response, error = client.complete(
                         messages=messages,
                         json_schema=json_schema,
                         creativity=creativity,
                         thinking_budget=effective_thinking,
                         max_retries=max_retries,
                     )
+
+                if error:
+                    return (model_name, '{"summary": ""}', error)
 
                 # Extract JSON from response
                 json_str = extract_json(response)
@@ -3806,13 +3809,16 @@ def summarize_ensemble(
                 # Resolve thinking_budget for this provider
                 effective_thinking = thinking_budget if cfg["provider"] in ("google", "openai", "anthropic", "huggingface", "huggingface-together") else None
 
-                response, _err = client.complete(
+                response, error = client.complete(
                     messages=messages,
                     json_schema=json_schema,
                     creativity=creativity,
                     thinking_budget=effective_thinking,
                     max_retries=max_retries,
                 )
+
+                if error:
+                    return (model_name, '{"summary": ""}', error)
 
                 # Extract JSON from response
                 json_str = extract_json(response)
