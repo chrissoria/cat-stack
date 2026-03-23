@@ -3272,7 +3272,8 @@ def build_output_dataframes(
         combined_data["input_index"].append(idx)
         # Truncate input_data for readability
         raw = result["response"]
-        preview = str(raw)[:100] + "..." if isinstance(raw, str) and len(raw) > 100 else raw
+        clean = " ".join(str(raw).split())  # collapse whitespace/newlines
+        preview = clean[:100] + "..." if len(clean) > 100 else clean
         combined_data["input_data"].append(preview)
         aggregated = result["aggregated"]
 
@@ -4020,7 +4021,8 @@ def summarize_ensemble(
             original_text_for_synthesis = page_label  # Use page label for synthesis context
         else:
             # Truncate input_data for readability; add input_index for joining
-            preview = str(item)[:100] + "..." if isinstance(item, str) and len(item) > 100 else item
+            clean = " ".join(str(item).split())  # collapse whitespace/newlines
+            preview = clean[:100] + "..." if len(clean) > 100 else clean
             row = {
                 "input_index": entry["idx"],
                 "input_data": preview,
