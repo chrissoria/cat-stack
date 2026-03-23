@@ -61,6 +61,41 @@ cat.classify(
 )
 ```
 
+#### Inline prompt tuning
+
+Add `prompt_tune=True` to automatically optimize the classification prompt before the full run. A browser UI opens for you to correct a small sample, then the optimized prompt is used for all remaining items.
+
+```python
+cat.classify(
+    input_data=df["text"],
+    categories=["Cat A", "Cat B", "Cat C"],
+    models=[("gpt-4o", "openai", key)],
+    prompt_tune=15,       # tune on 15 random items, then classify all
+    tune_iterations=3,    # max attempts per category (default 3)
+)
+```
+
+### `prompt_tune()`
+Standalone automatic prompt optimization. Iteratively refines classification prompts using user feedback — classify a sample, correct mistakes in the browser, and let the LLM generate targeted per-category instructions.
+
+```python
+result = cat.prompt_tune(
+    input_data=df["text"],
+    categories=["Cat A", "Cat B", "Cat C"],
+    api_key="your-key",
+    sample_size=15,
+    max_iterations=3,
+)
+
+# Use the optimized prompt for classification
+cat.classify(
+    input_data=df["text"],
+    categories=["Cat A", "Cat B", "Cat C"],
+    api_key="your-key",
+    system_prompt=result["system_prompt"],
+)
+```
+
 ### `extract()`
 Discover categories from a corpus using LLM-driven exploration.
 
@@ -102,11 +137,13 @@ All providers use the same `(model_name, provider, api_key)` tuple format. Provi
 
 ## Features
 
+- **Automatic prompt optimization** (`prompt_tune`) — correct a small sample in a browser UI, and the system generates per-category instructions that improve accuracy
 - **Multi-model ensemble** with consensus voting and agreement scores
 - **Batch API support** for OpenAI, Anthropic, Google, Mistral, and xAI
 - **Prompt strategies**: Chain-of-Thought, Chain-of-Verification, step-back prompting, few-shot examples
 - **Text, image, and PDF** input auto-detection
 - **Embedding similarity** tiebreaker for ensemble consensus ties
+- **Pilot test** — validate classifications on a small sample before committing to the full run
 
 ## License
 
