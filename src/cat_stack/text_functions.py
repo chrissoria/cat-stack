@@ -820,13 +820,17 @@ Output:
 
     print("\nTop categories:\n" + "\n".join(f"{i+1}. {c}" for i, c in enumerate(final[:max_categories])))
 
+    top = final[:max_categories]
+
     if filename:
-        result.to_csv(filename, index=False)
-        print(f"\nResults saved to {filename}")
+        import pandas as _pd
+        top_df = _pd.DataFrame({"rank": range(1, len(top) + 1), "category": top})
+        top_df.to_csv(filename, index=False)
+        print(f"\nTop {len(top)} categories saved to {filename}")
 
     return {
         "counts_df": result,
-        "top_categories": final[:max_categories],
+        "top_categories": top,
         "raw_top_text": top_categories_text
     }
 
