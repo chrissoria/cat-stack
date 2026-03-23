@@ -707,9 +707,11 @@ def explore_common_categories(
             )
 
             if error:
-                raise RuntimeError(
-                    f"Model call failed on pass {pass_idx+1}, chunk {i+1}: {error}"
+                import sys
+                sys.stderr.write(
+                    f"[CatStack] Warning: chunk {i+1} failed on pass {pass_idx+1}: {error}. Skipping.\n"
                 )
+                continue
 
             items = []
             for raw_line in (reply or "").splitlines():
