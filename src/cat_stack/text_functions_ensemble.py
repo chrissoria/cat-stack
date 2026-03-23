@@ -3232,6 +3232,7 @@ def build_output_dataframes(
 
     # Initialize data structures
     combined_data = {
+        "input_index": [],
         "input_data": [],
         "processing_status": [],
         "failed_models": [],
@@ -3267,8 +3268,12 @@ def build_output_dataframes(
             combined_data[f"category_{i}_resolved_by"] = []
 
     # Populate data
-    for result in all_results:
-        combined_data["input_data"].append(result["response"])
+    for idx, result in enumerate(all_results):
+        combined_data["input_index"].append(idx)
+        # Truncate input_data for readability
+        raw = result["response"]
+        preview = str(raw)[:100] + "..." if isinstance(raw, str) and len(raw) > 100 else raw
+        combined_data["input_data"].append(preview)
         aggregated = result["aggregated"]
 
         # Add PDF metadata if present
@@ -4007,13 +4012,19 @@ def summarize_ensemble(
         if is_pdf_mode and isinstance(item, tuple) and len(item) == 3:
             pdf_path, page_index, page_label = item
             row = {
+                "input_index": entry["idx"],
                 "input_data": page_label,
                 "pdf_path": pdf_path,
                 "page_index": page_index,
             }
             original_text_for_synthesis = page_label  # Use page label for synthesis context
         else:
-            row = {"input_data": item}
+            # Truncate input_data for readability; add input_index for joining
+            preview = str(item)[:100] + "..." if isinstance(item, str) and len(item) > 100 else item
+            row = {
+                "input_index": entry["idx"],
+                "input_data": preview,
+            }
             original_text_for_synthesis = item
 
         # Extract summaries from each model
