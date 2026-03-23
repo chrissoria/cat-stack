@@ -84,8 +84,13 @@ def summarize(
             - "bullets": Bullet-point list of key points
             - "one-liner": Single-sentence summary
             - "structured": Labeled sections (What, Who, Why, Impact)
-            - "report": Comprehensive full-page report with Overview, Background,
-              Key Provisions, Stakeholders/Impact, and Implementation sections
+            - "few-paragraphs": 2-4 paragraph summary with context and details
+            - "single-page": Single-page summary, thorough but concise
+            - "few-pages": Thorough multi-page summary covering all significant points
+            - "report": Full-page structured report with headings (Overview,
+              Background, Key Provisions, Stakeholders/Impact, Implementation)
+            - "detailed-report": Exhaustive report enumerating every provision,
+              with an additional Details section for exceptions and cross-references
         max_length (int): Maximum summary length in words
         focus (str): What to focus on (e.g., "main arguments", "emotional content")
         user_model (str): Model to use (default "gpt-4o")
@@ -217,6 +222,58 @@ def summarize(
             ),
             "max_length": None,
         },
+        "few-paragraphs": {
+            "instructions": (
+                "Write a summary of 2-4 paragraphs. The first paragraph should "
+                "state the main point. Subsequent paragraphs should cover key "
+                "details, context, and implications."
+            ),
+            "max_length": 300,
+        },
+        "single-page": {
+            "instructions": (
+                "Write a single-page summary. Cover the main points, key details, "
+                "and implications in a well-organized format. Use paragraph breaks "
+                "between topics. Be thorough but fit everything on one page."
+            ),
+            "max_length": 500,
+        },
+        "few-pages": {
+            "instructions": (
+                "Write a thorough multi-page summary. Cover all significant points "
+                "in detail. Use clear paragraph breaks between topics. Include "
+                "background context, specific provisions or arguments, affected "
+                "parties, and implications. Be comprehensive but well-organized."
+            ),
+            "max_length": 1500,
+        },
+        "detailed-report": {
+            "instructions": (
+                "Write an exhaustive, detailed report covering every significant "
+                "aspect of this document. Use clear headings and be as thorough "
+                "as possible — do not omit details.\n\n"
+                "## Overview\n"
+                "An executive summary (2-3 sentences).\n\n"
+                "## Background and Context\n"
+                "What is the background? What problem or situation prompted this? "
+                "Include relevant history and prior actions.\n\n"
+                "## Key Provisions\n"
+                "Detail ALL main provisions, requirements, or arguments. "
+                "Be specific about numbers, dates, names, and conditions. "
+                "Do not summarize — enumerate each provision.\n\n"
+                "## Stakeholders and Impact\n"
+                "Who is affected? What are the expected consequences? "
+                "Include both intended effects and potential concerns.\n\n"
+                "## Implementation\n"
+                "How will this be implemented? What is the timeline? "
+                "Are there enforcement mechanisms or milestones?\n\n"
+                "## Additional Details\n"
+                "Any other noteworthy details, exceptions, amendments, "
+                "or cross-references not covered above."
+            ),
+            "max_length": 3000,
+        },
+        # Keep "report" as alias for backward compat
         "report": {
             "instructions": (
                 "Write a comprehensive full-page report covering the following sections. "
