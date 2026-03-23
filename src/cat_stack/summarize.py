@@ -31,6 +31,7 @@ def summarize(
     api_key: str = None,
     description: str = "",
     instructions: str = "",
+    format: str = "paragraph",
     max_length: int = None,
     focus: str = None,
     user_model: str = "gpt-4o",
@@ -76,7 +77,15 @@ def summarize(
             - PDF: directory path, single PDF path, or list of PDF paths
         api_key (str): API key for the model provider (single-model mode)
         description (str): Description of what the content contains (provides context)
-        instructions (str): Specific summarization instructions (e.g., "bullet points")
+        instructions (str): Specific summarization instructions. When used with
+            format, these are appended as additional instructions. Default "".
+        format (str): Output format for the summary. Default "paragraph".
+            - "paragraph": Flowing prose summary (default)
+            - "bullets": Bullet-point list of key points
+            - "one-liner": Single-sentence summary
+            - "structured": Labeled sections (What, Who, Why, Impact)
+            - "report": Comprehensive full-page report with Overview, Background,
+              Key Provisions, Stakeholders/Impact, and Implementation sections
         max_length (int): Maximum summary length in words
         focus (str): What to focus on (e.g., "main arguments", "emotional content")
         user_model (str): Model to use (default "gpt-4o")
@@ -179,6 +188,75 @@ def summarize(
         ...     ],
         ... )
     """
+    # =========================================================================
+    # Resolve format → instructions + max_length defaults
+    # =========================================================================
+    _FORMAT_PRESETS = {
+        "paragraph": {
+            "instructions": "Write a concise summary in paragraph form.",
+            "max_length": None,
+        },
+        "bullets": {
+            "instructions": (
+                "Summarize as a bullet-point list. Each bullet should capture "
+                "one key point. Use '- ' prefix for each bullet."
+            ),
+            "max_length": None,
+        },
+        "one-liner": {
+            "instructions": "Summarize in a single sentence.",
+            "max_length": 40,
+        },
+        "structured": {
+            "instructions": (
+                "Summarize using these labeled sections:\n"
+                "- What: What does this do or say?\n"
+                "- Who: Who is affected or involved?\n"
+                "- Why: What is the motivation or purpose?\n"
+                "- Impact: What are the key consequences or effects?"
+            ),
+            "max_length": None,
+        },
+        "report": {
+            "instructions": (
+                "Write a comprehensive full-page report covering the following sections. "
+                "Use clear headings and be thorough.\n\n"
+                "## Overview\n"
+                "A brief executive summary (2-3 sentences).\n\n"
+                "## Background and Context\n"
+                "What is the background? What problem or situation prompted this? "
+                "Include relevant history and prior actions.\n\n"
+                "## Key Provisions\n"
+                "Detail the main provisions, requirements, or arguments. "
+                "Be specific about numbers, dates, names, and conditions.\n\n"
+                "## Stakeholders and Impact\n"
+                "Who is affected? What are the expected consequences? "
+                "Include both intended effects and potential concerns.\n\n"
+                "## Implementation\n"
+                "How will this be implemented? What is the timeline? "
+                "Are there enforcement mechanisms or milestones?"
+            ),
+            "max_length": 800,
+        },
+    }
+
+    format_lower = format.lower() if format else "paragraph"
+    if format_lower not in _FORMAT_PRESETS:
+        valid = ", ".join(f'"{k}"' for k in _FORMAT_PRESETS)
+        raise ValueError(f"format must be one of {valid}, got '{format}'")
+
+    preset = _FORMAT_PRESETS[format_lower]
+
+    # Format instructions are prepended to any user-provided instructions
+    if not instructions:
+        instructions = preset["instructions"]
+    else:
+        instructions = f"{preset['instructions']}\n\nAdditional instructions: {instructions}"
+
+    # Use format's max_length as default only if user didn't specify one
+    if max_length is None and preset["max_length"] is not None:
+        max_length = preset["max_length"]
+
     # Map mode to pdf_mode
     pdf_mode = mode if mode in ("image", "text", "both") else "image"
 
