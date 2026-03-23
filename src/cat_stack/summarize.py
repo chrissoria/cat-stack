@@ -91,6 +91,8 @@ def summarize(
               Background, Key Provisions, Stakeholders/Impact, Implementation)
             - "detailed-report": Exhaustive report enumerating every provision,
               with an additional Details section for exceptions and cross-references
+            - "alt-text": Factual visual description for blind/visually impaired
+              users — no interpretation, only what is literally shown
         max_length (int): Maximum summary length in words
         focus (str): What to focus on (e.g., "main arguments", "emotional content")
         user_model (str): Model to use (default "gpt-4o")
@@ -272,6 +274,19 @@ def summarize(
                 "or cross-references not covered above."
             ),
             "max_length": 3000,
+        },
+        "alt-text": {
+            "instructions": (
+                "Describe this content as alt-text for a blind or visually impaired person. "
+                "Report only the factual visual content — what is literally shown. "
+                "Include all text, labels, numbers, colors, layout, and visual elements "
+                "exactly as they appear. Do NOT interpret, editorialize, or add commentary "
+                "about the meaning, intent, or accuracy of the content. Do NOT use phrases "
+                "like 'the image claims' or 'this suggests'. Simply describe what a sighted "
+                "person would see, in enough detail that someone who cannot see the image "
+                "can fully understand its contents."
+            ),
+            "max_length": None,
         },
         # Keep "report" as alias for backward compat
         "report": {
