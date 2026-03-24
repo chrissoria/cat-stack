@@ -76,6 +76,7 @@ def prompt_tune(
     ui: str = "browser",
     optimize: str = "balanced",
     add_other: Union[str, bool] = "prompt",
+    thinking_budget: int = 0,
 ):
     """
     Automatically optimize the classification prompt using user feedback.
@@ -222,7 +223,7 @@ def prompt_tune(
         chain_of_verification=False,
         step_back_prompt=False,
         context_prompt=False,
-        thinking_budget=0,
+        thinking_budget=thinking_budget,
         use_json_schema=use_json_schema,
         fail_strategy="partial",
         max_retries=max_retries,
