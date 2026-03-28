@@ -29,9 +29,6 @@ dependencies = [
   "tqdm",
   "requests",
   "regex",
-  "openai",
-  "anthropic",
-  "perplexityai"
 ]
 
 [project.optional-dependencies]
