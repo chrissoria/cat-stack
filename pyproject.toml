@@ -28,6 +28,7 @@ dependencies = [
   "pandas",
   "tqdm",
   "requests",
+  "regex",
   "openai",
   "anthropic",
   "perplexityai"
