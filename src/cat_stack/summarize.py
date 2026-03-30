@@ -91,6 +91,8 @@ def summarize(
               Background, Key Provisions, Stakeholders/Impact, Implementation)
             - "detailed-report": Exhaustive report enumerating every provision,
               with an additional Details section for exceptions and cross-references
+            - "threads": Social media post for Threads (strict 500-character limit),
+              punchy and engaging, plain language, no hashtags/emojis
             - "alt-text": Factual visual description for blind/visually impaired
               users — no interpretation, only what is literally shown
         max_length (int): Maximum summary length in words
@@ -287,6 +289,22 @@ def summarize(
                 "can fully understand its contents."
             ),
             "max_length": None,
+        },
+        "threads": {
+            "instructions": (
+                "Write a social media post summarizing this content for Threads. "
+                "STRICT LIMIT: The entire output must be under 400 characters including spaces. "
+                "Structure:\n"
+                "- First line: A single standalone sentence that gives the high-level takeaway. "
+                "Start with who is acting and what they did, "
+                "e.g., 'The Senate just introduced a bill that...', 'House Republicans passed a measure to...', "
+                "'Congress is moving to...'. This sentence must make sense completely on its own.\n"
+                "- Then leave a blank line (two newlines).\n"
+                "- Then 2-3 short sentences with key supporting details — what it does, who it affects, why it matters.\n\n"
+                "No hashtags, no emojis, no bullet points — just clean, "
+                "compelling text. Use plain language."
+            ),
+            "max_length": 80,  # ~500 chars at ~6 chars/word
         },
         # Keep "report" as alias for backward compat
         "report": {
