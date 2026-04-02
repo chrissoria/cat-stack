@@ -569,6 +569,15 @@ class UnifiedLLMClient:
                 )
 
                 # Check for HTTP errors
+                if response.status_code == 400:
+                    error_text = response.text.lower()
+                    # If the model doesn't support structured outputs (json_object/json_schema),
+                    # retry without response_format. The prompt still asks for JSON and
+                    # extract_json() will parse it from the free-text response.
+                    if "structured" in error_text or "response_format" in error_text or "json_object" in error_text:
+                        if "response_format" in payload:
+                            payload.pop("response_format")
+                            continue  # Retry immediately without response_format
                 if response.status_code == 404:
                     return None, f"Model '{self.model}' not found for {self.provider}"
                 elif response.status_code in [401, 403]:

@@ -5,6 +5,16 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.11] - 2026-04-02
+
+### Fixed
+- **Structured output fallback for HuggingFace models**: When a model returns HTTP 400
+  indicating it does not support structured outputs (`response_format: json_object`),
+  the request is automatically retried without `response_format`. The prompt still
+  instructs the model to return JSON, and `extract_json()` parses it from the free-text
+  response. Fixes Qwen3-32B-FP8 and other quantized models on Novita that dropped
+  structured output support.
+
 ## [1.0.10] - 2026-04-02
 
 ### Fixed
