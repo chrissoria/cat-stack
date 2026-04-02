@@ -5,6 +5,22 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.10] - 2026-04-02
+
+### Fixed
+- **HuggingFace JSON key normalization**: Models using `json_object` mode (no strict
+  schema enforcement) sometimes return keys like `"1. Category name"` instead of `"1"`.
+  Added `_normalize_json_keys()` helper that extracts the leading numeric prefix,
+  applied in `aggregate_results()` and all retry validation paths. This fixes
+  classification failures for HuggingFace-routed models (Novita, Together, SambaNova, etc.).
+- **HuggingFace Together endpoint routing**: The Together-specific endpoint
+  (`router.huggingface.co/together/v1`) rejects model names with `:together` suffix
+  and does not support the clean model name either. Fixed by always routing through
+  the generic HuggingFace router (`router.huggingface.co/v1`) which natively handles
+  all router suffixes (`:together`, `:novita`, `:sambanova`, etc.).
+
+---
+
 ## [1.0.5] - 2026-03-23
 
 ### Added

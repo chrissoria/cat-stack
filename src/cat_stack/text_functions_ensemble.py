@@ -688,6 +688,31 @@ def prepare_model_configs(models: list, auto_download: bool = False) -> list:
     return configs
 
 
+def _normalize_json_keys(parsed: dict, expected_keys: set) -> dict:
+    """Normalize JSON keys by extracting leading numeric prefix.
+
+    Handles keys like "1. Category name" -> "1", which some HuggingFace
+    models produce when using json_object mode (no strict schema enforcement).
+    """
+    normalized = {}
+    for k, v in parsed.items():
+        stripped = str(k).strip()
+        # Extract leading digits
+        num_part = ""
+        for ch in stripped:
+            if ch.isdigit():
+                num_part += ch
+            else:
+                break
+        norm_key = num_part if num_part else stripped
+        # Prefer exact match; only use normalized key if exact not already present
+        if stripped in expected_keys:
+            normalized[stripped] = v
+        elif norm_key in expected_keys and norm_key not in normalized:
+            normalized[norm_key] = v
+    return normalized
+
+
 def aggregate_results(
     model_results: dict,
     categories: list,
@@ -725,18 +750,19 @@ def aggregate_results(
         else:
             try:
                 parsed = json.loads(json_str)
+
+                normalized_parsed = _normalize_json_keys(parsed, expected_keys)
+
                 # Accept if at least one key is a valid numbered category
                 # with a 0/1 value. Models may only return present categories
                 # (e.g. {"3": "1"}) — missing keys default to 0 downstream.
-                # Strip out any keys with invalid values so they also
-                # default to 0 cleanly instead of hitting error paths.
                 valid_count = sum(
-                    1 for k, v in parsed.items()
+                    1 for k, v in normalized_parsed.items()
                     if k in expected_keys and str(v).strip() in ("0", "1")
                 )
                 if valid_count > 0:
                     cleaned = {
-                        k: str(v).strip() for k, v in parsed.items()
+                        k: str(v).strip() for k, v in normalized_parsed.items()
                         if k in expected_keys and str(v).strip() in ("0", "1")
                     }
                     successful[model_name] = cleaned
@@ -3213,9 +3239,9 @@ Categorize text responses {cove_categorize}:
                         # Check JSON parsing AND schema validation
                         try:
                             parsed = json.loads(json_str)
-                            # At least one valid numbered key with 0/1 value
+                            normalized = _normalize_json_keys(parsed, expected_keys)
                             valid_count = sum(
-                                1 for k, v in parsed.items()
+                                1 for k, v in normalized.items()
                                 if k in expected_keys and str(v).strip() in ("0", "1")
                             )
                             if valid_count == 0:
@@ -3252,8 +3278,9 @@ Categorize text responses {cove_categorize}:
                             # Verify JSON is valid and has correct schema
                             try:
                                 parsed = json.loads(json_result)
+                                normalized = _normalize_json_keys(parsed, expected_keys)
                                 valid_count = sum(
-                                    1 for k, v in parsed.items()
+                                    1 for k, v in normalized.items()
                                     if k in expected_keys and str(v).strip() in ("0", "1")
                                 )
                                 if valid_count > 0:
@@ -3267,8 +3294,9 @@ Categorize text responses {cove_categorize}:
                     if error is None:
                         try:
                             parsed = json.loads(json_result)
+                            normalized = _normalize_json_keys(parsed, expected_keys)
                             valid_count = sum(
-                                1 for k, v in parsed.items()
+                                1 for k, v in normalized.items()
                                 if k in expected_keys and str(v).strip() in ("0", "1")
                             )
                             if valid_count > 0:

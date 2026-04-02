@@ -92,17 +92,37 @@ def validate_classification_json(json_str: str, num_categories: int) -> tuple[bo
         if not isinstance(parsed, dict):
             return False, None
 
+        # Build a mapping from numeric prefix to value, handling keys like
+        # "1", "1.", "1. Category name", etc.
+        numeric_map = {}
+        for key, val in parsed.items():
+            # Extract leading number from key
+            stripped = str(key).strip()
+            num_part = ""
+            for ch in stripped:
+                if ch.isdigit():
+                    num_part += ch
+                else:
+                    break
+            if num_part:
+                numeric_map[num_part] = val
+
         # Check that all expected keys are present and values are "0" or "1"
         for i in range(1, num_categories + 1):
             key = str(i)
-            if key not in parsed:
+            if key not in parsed and key not in numeric_map:
                 return False, None
-            val = str(parsed[key]).strip()
+            raw_val = parsed.get(key, numeric_map.get(key))
+            val = str(raw_val).strip()
             if val not in ("0", "1"):
                 return False, None
 
-        # Normalize values to strings
-        normalized = {str(i): str(parsed[str(i)]).strip() for i in range(1, num_categories + 1)}
+        # Normalize values to strings, preferring exact key match then numeric prefix
+        normalized = {}
+        for i in range(1, num_categories + 1):
+            key = str(i)
+            raw_val = parsed.get(key, numeric_map.get(key))
+            normalized[key] = str(raw_val).strip()
         return True, normalized
 
     except (json.JSONDecodeError, KeyError, TypeError):

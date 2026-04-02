@@ -187,18 +187,13 @@ class UnifiedLLMClient:
         self.provider = provider.lower()
         self.api_key = api_key
 
-        # Strip router suffix from model name and detect endpoint
-        clean_model, router = _parse_hf_model_suffix(model)
-        self.model = clean_model if self.provider == "huggingface" else model
+        # Keep full model name with router suffix — the generic HF router
+        # uses the suffix (e.g. :novita, :together) for routing.
+        self.model = model
 
-        # Auto-detect HuggingFace endpoint
+        # Auto-detect HuggingFace endpoint (but always use generic router)
         if self.provider == "huggingface":
-            detected_url = _detect_huggingface_endpoint(api_key, model)
-            if "together" in detected_url:
-                self.provider = "huggingface-together"
-            elif router and router in _HF_ROUTER_ENDPOINTS:
-                # Use the router-specific endpoint as a custom provider config
-                self._custom_endpoint = _HF_ROUTER_ENDPOINTS[router] + "/chat/completions"
+            _detect_huggingface_endpoint(api_key, model)
 
         if self.provider not in PROVIDER_CONFIG:
             raise ValueError(f"Unsupported provider: {provider}. "
