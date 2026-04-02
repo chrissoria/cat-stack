@@ -655,6 +655,38 @@ def prepare_model_configs(models: list, auto_download: bool = False) -> list:
                     f"API key required for provider '{detected_provider}' (model: {model})"
                 )
 
+        # Preflight probe: test the model with a minimal JSON call to catch
+        # issues (model not found, structured output not supported) before
+        # processing thousands of rows.
+        if detected_provider not in ("ollama", "claude-code"):
+            try:
+                probe_client = UnifiedLLMClient(
+                    provider=detected_provider,
+                    api_key=api_key,
+                    model=model,
+                )
+                probe_schema = {"type": "object", "properties": {"1": {"type": "string"}}, "required": ["1"], "additionalProperties": False}
+                probe_reply, probe_error = probe_client.complete(
+                    messages=[{"role": "user", "content": 'Reply with exactly: {"1":"0"}'}],
+                    json_schema=probe_schema,
+                    creativity=0,
+                    max_retries=1,
+                    initial_delay=1.0,
+                )
+                if probe_error:
+                    if "not found" in str(probe_error).lower():
+                        raise ValueError(
+                            f"\n[CatLLM] Model '{model}' not found on {detected_provider}. "
+                            f"Check the model name and try again."
+                        )
+                    # Non-fatal: log warning but continue (e.g., structured output fallback)
+                    print(f"\n[CatLLM] Warning: preflight test for '{model}' returned: {probe_error}")
+                    print(f"  Classification will continue, but this model may have issues.\n")
+            except (ValueError, ConnectionError):
+                raise  # Re-raise model-not-found errors
+            except Exception:
+                pass  # Network timeouts etc. — don't block on preflight
+
         # Per-model creativity override (None means use global)
         per_model_creativity = options.get("creativity", None) if options else None
 

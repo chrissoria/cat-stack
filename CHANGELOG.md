@@ -5,6 +5,21 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.12] - 2026-04-02
+
+### Added
+- **Preflight model validation**: Before classification begins, each cloud model
+  receives a minimal test call to catch issues early. If the model does not exist,
+  classification halts immediately with a clear error message. If the model does not
+  support structured JSON output, a warning is displayed and classification proceeds
+  with the prompt-based fallback. Prevents long-running jobs from failing silently
+  due to a single broken model.
+- **Structured output fallback warning**: When the fallback is triggered, a one-time
+  message is printed: `[CatLLM] Model 'X' does not support structured JSON output.
+  Falling back to prompt-based JSON parsing.`
+
+---
+
 ## [1.0.11] - 2026-04-02
 
 ### Fixed

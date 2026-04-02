@@ -576,6 +576,10 @@ class UnifiedLLMClient:
                     # extract_json() will parse it from the free-text response.
                     if "structured" in error_text or "response_format" in error_text or "json_object" in error_text:
                         if "response_format" in payload:
+                            if not getattr(self, '_warned_no_structured', False):
+                                print(f"\n[CatLLM] Model '{self.model}' does not support structured JSON output.")
+                                print(f"  Falling back to prompt-based JSON parsing.\n")
+                                self._warned_no_structured = True
                             payload.pop("response_format")
                             continue  # Retry immediately without response_format
                 if response.status_code == 404:
