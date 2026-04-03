@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **400 "model not found" error handling**: Extended the `_providers.py` error handler to
   treat HTTP 400 responses containing both "not found" and "model" as model-not-found errors
   (same as 404), so they surface a clear message instead of silently failing.
+- **Batch summarization whitespace preservation**: `_batch.py` now uses the safe
+  `extract_json()` implementation that preserves spaces inside JSON string values.
+  Fixes batch-mode summaries that were returning words run together (for example,
+  bullet-point summaries and structured summary fields).
 
 ---
 

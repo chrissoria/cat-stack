@@ -26,7 +26,7 @@ import time
 import requests
 
 from ._providers import UnifiedLLMClient
-from ._utils import extract_json
+from .text_functions import extract_json
 
 # =============================================================================
 # Constants
