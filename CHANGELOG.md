@@ -5,6 +5,21 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.13] - 2026-04-03
+
+### Added
+- **`format="raw"` summarize preset**: New format with no built-in instruction, allowing
+  callers to supply the full instruction via `instructions=` without any preset preamble.
+  Used internally by cat-pol's `format="bill_analysis"` to prevent the default paragraph
+  instruction from overriding structured extraction prompts.
+
+### Fixed
+- **400 "model not found" error handling**: Extended the `_providers.py` error handler to
+  treat HTTP 400 responses containing both "not found" and "model" as model-not-found errors
+  (same as 404), so they surface a clear message instead of silently failing.
+
+---
+
 ## [1.0.12] - 2026-04-02
 
 ### Added

@@ -582,7 +582,7 @@ class UnifiedLLMClient:
                                 self._warned_no_structured = True
                             payload.pop("response_format")
                             continue  # Retry immediately without response_format
-                if response.status_code == 404:
+                if response.status_code == 404 or (response.status_code == 400 and "not found" in response.text.lower() and "model" in response.text.lower()):
                     return None, f"Model '{self.model}' not found for {self.provider}"
                 elif response.status_code in [401, 403]:
                     return None, f"Authentication failed for {self.provider}"

@@ -201,6 +201,10 @@ def summarize(
     # Resolve format → instructions + max_length defaults
     # =========================================================================
     _FORMAT_PRESETS = {
+        "raw": {
+            "instructions": "",   # No preset — caller supplies the full instruction via `instructions=`
+            "max_length": None,
+        },
         "paragraph": {
             "instructions": "Write a concise summary in paragraph form.",
             "max_length": None,
@@ -337,11 +341,13 @@ def summarize(
 
     preset = _FORMAT_PRESETS[format_lower]
 
-    # Format instructions are prepended to any user-provided instructions
+    # Format instructions are prepended to any user-provided instructions.
+    # If the preset has no instruction (e.g. "raw"), user instructions are used as-is.
     if not instructions:
         instructions = preset["instructions"]
-    else:
+    elif preset["instructions"]:
         instructions = f"{preset['instructions']}\n\nAdditional instructions: {instructions}"
+    # else: preset is empty ("raw") — keep user instructions unchanged
 
     # Use format's max_length as default only if user didn't specify one
     if max_length is None and preset["max_length"] is not None:
