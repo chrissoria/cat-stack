@@ -5,6 +5,16 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.16] - 2026-04-24
+
+### Fixed
+- **Mistral API 400 error on structured output**: `_providers.py` was sending
+  `response_format: {type: "json_schema", strict: true}` to the Mistral API, which
+  does not support the strict json_schema mode. Added `"mistral"` to the `json_object`
+  provider list so Mistral requests use `{type: "json_object"}` instead.
+
+---
+
 ## [1.0.15] - 2026-04-21
 
 ### Added

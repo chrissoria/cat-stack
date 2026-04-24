@@ -270,8 +270,8 @@ class UnifiedLLMClient:
         }
 
         # Structured output
-        # Ollama and HuggingFace only support json_object mode, not strict json_schema
-        if json_schema and self.provider not in ["ollama", "huggingface", "huggingface-together"]:
+        # Ollama, HuggingFace, and Mistral only support json_object mode, not strict json_schema
+        if json_schema and self.provider not in ["ollama", "huggingface", "huggingface-together", "mistral"]:
             payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
