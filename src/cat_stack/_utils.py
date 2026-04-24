@@ -6,6 +6,7 @@ encoding, and other common operations used across the package.
 """
 
 import json
+import re
 import regex
 
 __all__ = [
@@ -14,6 +15,8 @@ __all__ = [
     "extract_json",
     "validate_classification_json",
     "ollama_two_step_classify",
+    # Label cleaning
+    "_clean_label",
     # Stepback utilities
     "_get_stepback_insight",
     # Image utilities
@@ -28,6 +31,29 @@ __all__ = [
     "_encode_bytes_to_base64",
     "_extract_page_text",
 ]
+
+
+# =============================================================================
+# Label Cleaning
+# =============================================================================
+
+def _clean_label(label: str) -> str:
+    """Strip markdown formatting from a category label.
+
+    Some models (particularly quantized local models via Ollama) inconsistently
+    format category labels with markdown bold markers, parenthetical notes, and
+    frequency counts. This function normalises the raw string to a plain label.
+
+    Examples:
+        "**Immediate Family** (Parents, Siblings)" -> "Immediate Family"
+        "**immediate family** (2)"                 -> "immediate family"
+        "Emotional Support: 3"                     -> "Emotional Support"
+        "emotional support"                         -> "emotional support"
+    """
+    label = label.replace("**", "")              # remove bold markers
+    label = re.sub(r"\s*\([^)]*\)", "", label)   # remove parenthetical notes
+    label = re.sub(r"\s*:\s*\d+\s*$", "", label) # remove trailing ": N" counts
+    return label.strip()
 
 
 # =============================================================================

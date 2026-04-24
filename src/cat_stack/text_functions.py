@@ -72,6 +72,7 @@ from ._providers import (
     check_claude_cli_available,
     OLLAMA_MODEL_SIZES,
 )
+from ._utils import _clean_label
 
 
 # =============================================================================
@@ -780,49 +781,41 @@ def explore_common_categories(
 
     # Second-pass semantic merge prompt
     seed_list = result["Category"].head(max_categories * 3).tolist()
+    seed_top = result.head(max_categories * 3)
+    seed_with_counts = "\n".join(
+        f"- {row['Category']} ({row['counts']})"
+        for _, row in seed_top.iterrows()
+    )
+
+    # Build the survey context line
+    survey_context = survey_question if survey_question else "a survey"
 
     if specificity == "specific":
         name_instruction = (
-            "Keep category names DETAILED and DESCRIPTIVE with examples. "
-            "Each category name MUST include a brief clarifying phrase using "
-            "'such as' or parenthetical examples. For example:\n"
-            "   - 'Residential Zoning Changes (e.g., rezoning parcels, density adjustments)'\n"
-            "   - 'Construction Contract Extensions (e.g., timeline amendments, scope changes)'\n"
-            "   - 'Environmental Compliance (e.g., stormwater regulations, habitat protections)'\n"
-            "Do NOT use short generic labels like 'Zoning' or 'Contracts'. "
-            "Every category must be specific enough that a reader immediately "
-            "understands what types of documents belong in it."
+            "Prefer specific, descriptive labels over vague ones. "
+            "Each category name SHOULD include a brief clarifying phrase using "
+            "'such as' or parenthetical examples where helpful."
         )
     else:
         name_instruction = (
-            "Keep category names broad and general. "
-            "Use the most frequent or clearest label when merging."
+            "Prefer specific, descriptive labels over vague ones."
         )
 
     second_prompt = f"""
-You are a data analyst reviewing categorized text data.
+You are consolidating categories extracted from survey responses to: "{survey_context}"
 
-Task: From the provided categories, identify and return the top {max_categories} CONCEPTUALLY UNIQUE categories.
+Task: Reduce to {max_categories} categories.
 
-Critical Instructions:
-1) Exact duplicates are already removed.
-2) Merge SEMANTIC duplicates (same concept, different wording). Examples:
-   - "closer to work" = "commute/proximity to work"
-   - "breakup/household conflict" = "relationship problems"
-3) When merging:
-   - Combine frequencies mentally
-   - Each concept appears ONLY ONCE
-4) {name_instruction}
-5) Return ONLY a numbered list of {max_categories} categories. No extra text.
+Step 1 — Cluster: Group the categories below into clusters where each cluster represents ONE distinct reason a respondent might give. Categories that describe the same reason using different words or from different angles belong in the same cluster. For example, a category about relationship quality and a category about emotional closeness likely belong together if they reflect the same underlying reason.
 
-Pre-processed Categories (sorted by frequency, top sample):
-{seed_list}
+Step 2 — Label: For each cluster, choose the single label that best captures the shared meaning. {name_instruction}
 
-Output:
-1. category
-2. category
-...
-{max_categories}. category
+Step 3 — Rank: Sum the frequency counts within each cluster. Output the top {max_categories} clusters by total count.
+
+Categories (sorted by extraction frequency):
+{seed_with_counts}
+
+Return ONLY a numbered list of {max_categories} categories.
 """.strip()
 
     # Second pass call
@@ -853,6 +846,10 @@ Output:
     # Fallback to counts_df if second pass failed
     if not final:
         final = result["Category"].head(max_categories).tolist()
+
+    # Strip markdown formatting that some models (e.g. quantized local models)
+    # inconsistently add to category label strings.
+    final = [_clean_label(c) for c in final]
 
     print("\nTop categories:\n" + "\n".join(f"{i+1}. {c}" for i, c in enumerate(final[:max_categories])))
 

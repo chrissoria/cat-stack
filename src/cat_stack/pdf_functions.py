@@ -1,6 +1,7 @@
 import warnings
 
 from .text_functions import _detect_model_source
+from ._utils import _clean_label
 from .calls.pdf_stepback import get_pdf_stepback_insight
 
 # Exported names (excludes deprecated pdf_multi_class)
@@ -1966,30 +1967,27 @@ def explore_pdf_categories(
 
     # Second-pass semantic merge
     seed_list = result["Category"].head(max_categories * 3).tolist()
+    seed_top = result.head(max_categories * 3)
+    seed_with_counts = "\n".join(
+        f"- {row['Category']} ({row['counts']})"
+        for _, row in seed_top.iterrows()
+    )
 
     second_prompt = f"""
-You are a data analyst reviewing categorized document data.
+You are consolidating categories extracted from document data.
 
-Task: From the provided categories, identify and return the top {max_categories} CONCEPTUALLY UNIQUE categories.
+Task: Reduce to {max_categories} categories.
 
-Critical Instructions:
-1) Exact duplicates are already removed.
-2) Merge SEMANTIC duplicates (same concept, different wording).
-3) When merging:
-   - Combine frequencies mentally
-   - Keep the most frequent OR clearest label
-   - Each concept appears ONLY ONCE
-4) Keep category names {specificity}.
-5) Return ONLY a numbered list of {max_categories} categories. No extra text.
+Step 1 — Cluster: Group the categories below into clusters where each cluster represents ONE distinct theme. Categories that describe the same theme using different words or from different angles belong in the same cluster.
 
-Pre-processed Categories (sorted by frequency, top sample):
-{seed_list}
+Step 2 — Label: For each cluster, choose the single label that best captures the shared meaning. Prefer specific, descriptive labels over vague ones.
 
-Output:
-1. category
-2. category
-...
-{max_categories}. category
+Step 3 — Rank: Sum the frequency counts within each cluster. Output the top {max_categories} clusters by total count.
+
+Categories (sorted by extraction frequency):
+{seed_with_counts}
+
+Return ONLY a numbered list of {max_categories} categories.
 """.strip()
 
     try:
@@ -2074,6 +2072,10 @@ Output:
             final.append(m.group(1).strip())
     if not final:
         final = [l.strip("-*• ").strip() for l in top_categories_text.splitlines() if l.strip()]
+
+    # Strip markdown formatting that some models (e.g. quantized local models)
+    # inconsistently add to category label strings.
+    final = [_clean_label(c) for c in final]
 
     print("\nTop categories:\n" + "\n".join(f"{i+1}. {c}" for i, c in enumerate(final[:max_categories])))
 

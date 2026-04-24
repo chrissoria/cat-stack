@@ -5,6 +5,18 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.15] - 2026-04-21
+
+### Added
+- **`_clean_label` utility function**: New `_utils._clean_label` strips markdown formatting
+  (bold markers `**...**`, parenthetical notes `(...)`, and trailing frequency counts `: N`)
+  from category label strings. This normalises output from quantized local models (e.g.
+  Mistral Nemo via Ollama) that inconsistently format labels with markdown decoration.
+- Applied `_clean_label` post-processing to the final category list in `text_functions.py`,
+  `image_functions.py`, and `pdf_functions.py` so all extraction paths produce clean labels.
+
+---
+
 ## [1.0.14] - 2026-04-03
 
 ### Fixed
