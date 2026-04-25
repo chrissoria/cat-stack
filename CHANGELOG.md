@@ -5,6 +5,17 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.17] - 2026-04-25
+
+### Fixed
+- **`explore()` markdown in raw output**: Applied `_clean_label` to the raw
+  category list returned by `explore()` (via `explore_common_categories` with
+  `return_raw=True`), so bold markers, parentheticals, and frequency suffixes
+  are stripped from the saturation frequency output, matching the behaviour
+  already applied in the `extract()` path.
+
+---
+
 ## [1.0.16] - 2026-04-24
 
 ### Fixed

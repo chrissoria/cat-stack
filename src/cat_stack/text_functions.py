@@ -757,7 +757,7 @@ def explore_common_categories(
 
     # Early return for raw output (used by explore())
     if return_raw:
-        return all_items
+        return [_clean_label(item) for item in all_items]
 
     # Normalize and count
     def normalize_category(cat):
