@@ -33,6 +33,7 @@ def explore(
     progress_callback=None,
     chunk_delay: float = 0.0,
     auto_download: bool = False,
+    max_workers: int = 1,
 ):
     """
     Explore categories in text data, returning the raw extracted list.
@@ -60,9 +61,13 @@ def explore(
         focus (str): Optional focus instruction for category extraction.
         progress_callback (callable): Optional callback for progress updates.
         chunk_delay (float): Delay in seconds between API calls to avoid rate
-            limits. Default 0.0 (no delay).
+            limits. Default 0.0 (no delay). Ignored when max_workers > 1.
         auto_download (bool): If True, automatically download missing Ollama
             models without prompting. Default False.
+        max_workers (int): Number of parallel threads for API calls. Default 1
+            (sequential). Set to e.g. 8 to dispatch up to 8 chunks concurrently.
+            Reduces wallclock time proportionally; ensure your API tier can handle
+            the concurrent request load.
 
     Returns:
         list[str]: Every category string extracted from every chunk across
@@ -101,6 +106,7 @@ def explore(
         return_raw=True,
         chunk_delay=chunk_delay,
         auto_download=auto_download,
+        max_workers=max_workers,
     )
 
     if filename:

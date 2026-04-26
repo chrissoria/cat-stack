@@ -524,6 +524,7 @@ def explore_common_categories(
     return_raw: bool = False,
     chunk_delay: float = 0.0,
     auto_download: bool = False,
+    max_workers: int = 1,
     # Legacy parameter names for backward compatibility
     user_model: str = None,
     model_source: str = None,
@@ -704,56 +705,112 @@ def explore_common_categories(
     total_steps = (iterations * divisions) + 1
     current_step = 0
 
+    def _parse_reply(reply):
+        """Extract category strings from a numbered-list reply."""
+        items = []
+        for raw_line in (reply or "").splitlines():
+            m = line_pat.match(raw_line.strip())
+            if m:
+                items.append(m.group(1).strip())
+        if not items:
+            for raw_line in (reply or "").splitlines():
+                s = raw_line.strip()
+                if s:
+                    items.append(s)
+        return items
+
+    def _call_chunk(job):
+        """Worker: make one API call for a single (pass, division) chunk."""
+        pass_idx, div_idx, chunk = job
+        survey_participant_chunks = "; ".join(str(x) for x in chunk)
+        prompt = make_prompt(survey_participant_chunks)
+        messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": prompt},
+        ]
+        reply, error = client.complete(
+            messages=messages,
+            creativity=creativity,
+            force_json=False,
+        )
+        return pass_idx, div_idx, reply, error
+
+    # Pre-generate all (pass, division) chunks in a deterministic order
+    all_jobs = []
     for pass_idx in range(iterations):
-        random_chunks = []
-        for _ in range(divisions):
+        for div_idx in range(divisions):
             seed = int(rng.integers(0, 2**32 - 1))
             chunk = input_data.sample(n=chunk_size, random_state=seed).tolist()
-            random_chunks.append(chunk)
+            all_jobs.append((pass_idx, div_idx, chunk))
 
-        for i in tqdm(range(divisions), desc=f"Processing chunks (pass {pass_idx+1}/{iterations})"):
-            survey_participant_chunks = "; ".join(str(x) for x in random_chunks[i])
-            prompt = make_prompt(survey_participant_chunks)
+    if max_workers > 1:
+        # Parallel execution via ThreadPoolExecutor
+        import sys
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import threading
 
-            messages = [
-                {"role": "system", "content": system_content},
-                {"role": "user", "content": prompt}
-            ]
+        if chunk_delay > 0:
+            print(f"[CatStack] Note: chunk_delay is ignored in parallel mode (max_workers={max_workers}).")
 
-            reply, error = client.complete(
-                messages=messages,
-                creativity=creativity,
-                force_json=False,  # Text response, not JSON
-            )
+        step_lock = threading.Lock()
 
-            if error:
-                import sys
-                sys.stderr.write(
-                    f"[CatStack] Warning: chunk {i+1} failed on pass {pass_idx+1}: {error}. Skipping.\n"
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_call_chunk, job): job for job in all_jobs}
+            for future in tqdm(as_completed(futures), total=len(all_jobs), desc="Processing chunks (parallel)"):
+                pass_idx, div_idx, reply, error = future.result()
+                if error:
+                    sys.stderr.write(
+                        f"[CatStack] Warning: chunk div={div_idx+1} pass={pass_idx+1} failed: {error}. Skipping.\n"
+                    )
+                    continue
+                items = _parse_reply(reply)
+                all_items.extend(items)
+
+                with step_lock:
+                    current_step += 1
+                    if progress_callback:
+                        progress_callback(current_step, total_steps, f"Pass {pass_idx+1}/{iterations}, chunk {div_idx+1}/{divisions}")
+    else:
+        # Sequential execution (original behaviour)
+        import sys
+        for pass_idx, div_idx, chunk in [
+            (j[0], j[1], j[2]) for j in all_jobs
+        ]:
+            # Group tqdm per pass for cleaner output
+            if div_idx == 0:
+                pass  # tqdm wraps the inner loop below
+
+        # Re-iterate with per-pass tqdm grouping preserved
+        job_iter = iter(all_jobs)
+        for pass_idx in range(iterations):
+            pass_jobs = [next(job_iter) for _ in range(divisions)]
+            for pi, di, chunk in tqdm(pass_jobs, desc=f"Processing chunks (pass {pass_idx+1}/{iterations})"):
+                survey_participant_chunks = "; ".join(str(x) for x in chunk)
+                prompt = make_prompt(survey_participant_chunks)
+                messages = [
+                    {"role": "system", "content": system_content},
+                    {"role": "user", "content": prompt},
+                ]
+                reply, error = client.complete(
+                    messages=messages,
+                    creativity=creativity,
+                    force_json=False,
                 )
-                continue
+                if error:
+                    sys.stderr.write(
+                        f"[CatStack] Warning: chunk {di+1} failed on pass {pi+1}: {error}. Skipping.\n"
+                    )
+                    continue
 
-            items = []
-            for raw_line in (reply or "").splitlines():
-                m = line_pat.match(raw_line.strip())
-                if m:
-                    items.append(m.group(1).strip())
-            if not items:
-                for raw_line in (reply or "").splitlines():
-                    s = raw_line.strip()
-                    if s:
-                        items.append(s)
+                items = _parse_reply(reply)
+                all_items.extend(items)
 
-            all_items.extend(items)
+                current_step += 1
+                if progress_callback:
+                    progress_callback(current_step, total_steps, f"Pass {pi+1}/{iterations}, chunk {di+1}/{divisions}")
 
-            # Progress callback
-            current_step += 1
-            if progress_callback:
-                progress_callback(current_step, total_steps, f"Pass {pass_idx+1}/{iterations}, chunk {i+1}/{divisions}")
-
-            # Per-chunk delay to avoid rate limits
-            if chunk_delay > 0:
-                time.sleep(chunk_delay)
+                if chunk_delay > 0:
+                    time.sleep(chunk_delay)
 
     # Early return for raw output (used by explore())
     if return_raw:
