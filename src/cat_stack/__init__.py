@@ -1,130 +1,18 @@
-# SPDX-FileCopyrightText: 2025-present Christopher Soria <chrissoria@berkeley.edu>
-#
-# SPDX-License-Identifier: GPL-3.0-or-later
+"""Back-compat alias for `catstack`.
 
-from .__about__ import (
-    __version__,
-    __author__,
-    __description__,
-    __title__,
-    __url__,
-    __license__,
-)
+The canonical import name is `catstack`. `cat_stack` is retained so existing
+code continues to work; prefer `catstack` in new code.
+"""
+import importlib
+import sys
 
-# =============================================================================
-# Public API - Organized by function type
-# =============================================================================
+_canonical = "catstack"
+_real = importlib.import_module(_canonical)
 
-# Main entry points
-from .extract import extract
-from .explore import explore
-from .classify import classify
-from .summarize import summarize
-from .prompt_tune import prompt_tune
+sys.modules[__name__] = _real
 
-# Category analysis
-from ._category_analysis import has_other_category, check_category_verbosity
-
-# Web fetching utilities
-from ._web_fetch import is_url, fetch_url_text, fetch_urls, detect_url_input, strip_html_tags
-
-# =============================================================================
-# Provider utilities (for advanced users)
-# =============================================================================
-from ._batch import BatchJobExpiredError, BatchJobFailedError
-
-from ._providers import (
-    UnifiedLLMClient,
-    detect_provider,
-    set_ollama_endpoint,
-    check_ollama_running,
-    list_ollama_models,
-    check_ollama_model,
-    pull_ollama_model,
-    PROVIDER_CONFIG,
-)
-
-# =============================================================================
-# Backward compatibility - Deprecated functions
-# These are kept for backward compatibility but users should migrate to the
-# new unified API (extract, classify, summarize)
-# =============================================================================
-
-# Extraction functions (use extract() instead)
-from .extract import (
-    explore_common_categories,
-    explore_corpus,
-    explore_image_categories,
-    explore_pdf_categories,
-)
-
-# Classification functions (use classify() instead)
-from .classify import (
-    classify_ensemble,
-    multi_class,
-    image_multi_class,
-    pdf_multi_class,
-)
-
-# Summarization functions (use summarize() instead)
-from .summarize import summarize_ensemble
-
-# =============================================================================
-# Additional utilities from existing modules (backward compatibility)
-# =============================================================================
-from .text_functions import (
-    build_json_schema,
-    extract_json,
-    validate_classification_json,
-)
-
-from .image_functions import (
-    image_score_drawing,
-    image_features,
-)
-
-# Define public API
-__all__ = [
-    # Batch mode exceptions
-    "BatchJobExpiredError",
-    "BatchJobFailedError",
-    # Main entry points
-    "extract",
-    "explore",
-    "classify",
-    "summarize",
-    "prompt_tune",
-    # Category analysis
-    "has_other_category",
-    "check_category_verbosity",
-    # Provider utilities
-    "UnifiedLLMClient",
-    "detect_provider",
-    "set_ollama_endpoint",
-    "check_ollama_running",
-    "list_ollama_models",
-    "check_ollama_model",
-    "pull_ollama_model",
-    "PROVIDER_CONFIG",
-    # Web fetching utilities
-    "is_url",
-    "fetch_url_text",
-    "fetch_urls",
-    "detect_url_input",
-    "strip_html_tags",
-    # Deprecated (backward compatibility)
-    "explore_common_categories",
-    "explore_corpus",
-    "explore_image_categories",
-    "explore_pdf_categories",
-    "classify_ensemble",
-    "summarize_ensemble",
-    "multi_class",
-    "image_multi_class",
-    "pdf_multi_class",
-    "image_score_drawing",
-    "image_features",
-    "build_json_schema",
-    "extract_json",
-    "validate_classification_json",
-]
+_src_prefix = _canonical + "."
+_dst_prefix = __name__ + "."
+for _name in list(sys.modules):
+    if _name.startswith(_src_prefix):
+        sys.modules[_dst_prefix + _name[len(_src_prefix):]] = sys.modules[_name]

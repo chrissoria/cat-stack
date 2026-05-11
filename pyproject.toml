@@ -43,38 +43,40 @@ Issues = "https://github.com/chrissoria/cat-stack/issues"
 Source = "https://github.com/chrissoria/cat-stack"
 
 [tool.hatch.version]
-path = "src/cat_stack/__about__.py"
+path = "src/catstack/__about__.py"
 
 [tool.hatch.envs.types]
 extra-dependencies = [
   "mypy>=1.0.0",
 ]
 [tool.hatch.envs.types.scripts]
-check = "mypy --install-types --non-interactive {args:src/cat_stack tests}"
+check = "mypy --install-types --non-interactive {args:src/catstack tests}"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/cat_stack"]
+packages = ["src/catstack", "src/cat_stack"]
 include = [
-    "src/cat_stack/**/*.py",
-    "src/cat_stack/images/*",
+    "src/catstack/**/*.py",
+    "src/catstack/images/*",
+    "src/cat_stack/__init__.py",
 ]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "src/cat_stack/**/*.py",
-    "src/cat_stack/images/*",
+    "src/catstack/**/*.py",
+    "src/catstack/images/*",
+    "src/cat_stack/__init__.py",
 ]
 
 [tool.coverage.run]
-source_pkgs = ["cat_stack", "tests"]
+source_pkgs = ["catstack", "tests"]
 branch = true
 parallel = true
 omit = [
-  "src/cat_stack/__about__.py",
+  "src/catstack/__about__.py",
 ]
 
 [tool.coverage.paths]
-cat_stack = ["src/cat_stack", "*/cat-stack/src/cat_stack"]
+catstack = ["src/catstack", "*/cat-stack/src/catstack"]
 tests = ["tests", "*/cat-stack/tests"]
 
 [tool.coverage.report]

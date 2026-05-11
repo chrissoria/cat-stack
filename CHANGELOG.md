@@ -5,6 +5,21 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.19] - 2026-05-11
+
+### Changed
+- **Canonical import name normalized to `catstack`** (no separator), matching
+  the rest of the cat-* family. The previous name `cat_stack` continues to
+  work as a backward-compatible alias — `import cat_stack` and `import catstack`
+  resolve to the same module object, and `from cat_stack.text_functions import X`
+  still works. Existing code does not need to change. New code is encouraged
+  to use `catstack`.
+- **Source directory** renamed from `src/cat_stack/` to `src/catstack/`. The
+  alias is shipped as a tiny `src/cat_stack/__init__.py` that does a
+  `sys.modules` swap. Wheels include both.
+
+---
+
 ## [1.0.18] - 2026-04-26
 
 ### Added
