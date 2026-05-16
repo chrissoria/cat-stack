@@ -36,7 +36,7 @@ Installing `cat-llm` pulls in all of the above.
 ## Quick Start
 
 ```python
-import cat_stack as cat
+import catstack as cat
 
 # Classify text into predefined categories
 result = cat.classify(
