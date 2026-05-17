@@ -219,7 +219,7 @@ def ollama_two_step_classify(
     survey_question: str = "",
     creativity: float = None,
     max_retries: int = 5,
-) -> tuple[str, str | None]:
+) -> tuple[str, str, str | None]:
     """
     Two-step classification for Ollama models.
 
@@ -239,7 +239,10 @@ def ollama_two_step_classify(
         max_retries: Number of retry attempts for JSON validation
 
     Returns:
-        tuple: (json_string, error_message or None)
+        tuple: (json_string, step1_raw_reply, error_message or None)
+              step1_raw_reply is the unformatted step-1 output; callers can
+              pass it to the fine-tuned formatter even when step-2 produced
+              syntactically valid (but semantically empty) JSON.
     """
     num_categories = len(categories)
     survey_context = f"Context: {survey_question}." if survey_question else ""
@@ -276,9 +279,14 @@ Format your answer as:
         json_schema=None,  # No JSON requirement for step 1
         creativity=creativity,
     )
+    # Preserve the original step-1 text; the retry loop below overwrites
+    # step1_reply with error context, but callers need the raw output so the
+    # fine-tuned formatter can extract the true classification signal from it
+    # even when step-2 later produces valid-but-all-zero JSON.
+    original_step1_reply = step1_reply
 
     if step1_error:
-        return '{"1":"e"}', f"Step 1 failed: {step1_error}"
+        return '{"1":"e"}', "", f"Step 1 failed: {step1_error}"
 
     # ==========================================================================
     # Step 2: JSON Formatting with validation and retry
@@ -320,14 +328,14 @@ Your JSON output:"""
         if step2_error:
             if attempt < max_retries - 1:
                 continue
-            return '{"1":"e"}', f"Step 2 failed: {step2_error}"
+            return '{"1":"e"}', original_step1_reply, f"Step 2 failed: {step2_error}"
 
         # Extract and validate JSON
         extracted = extract_json(step2_reply)
         is_valid, normalized = validate_classification_json(extracted, num_categories)
 
         if is_valid:
-            return json.dumps(normalized), None
+            return json.dumps(normalized), original_step1_reply, None
 
         # If invalid, try again with more explicit instructions
         if attempt < max_retries - 1:
@@ -340,7 +348,7 @@ Please be more careful to output EXACTLY {num_categories} categories numbered 1 
 
     # All retries exhausted - try to salvage what we can
     extracted = extract_json(step2_reply) if step2_reply else '{"1":"e"}'
-    return extracted, f"JSON validation failed after {max_retries} attempts"
+    return extracted, original_step1_reply, f"JSON validation failed after {max_retries} attempts"
 
 
 # =============================================================================

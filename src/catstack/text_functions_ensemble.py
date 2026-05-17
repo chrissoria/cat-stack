@@ -2935,7 +2935,7 @@ Categorize text responses {cove_categorize}:
                 response_text = item
 
                 if cfg["use_two_step"]:  # Ollama
-                    json_result, error = ollama_two_step_classify(
+                    json_result, step1_raw, error = ollama_two_step_classify(
                         client=client,
                         response_text=response_text,
                         categories=categories,
@@ -2944,8 +2944,18 @@ Categorize text responses {cove_categorize}:
                         creativity=effective_creativity,
                         max_retries=max_retries,
                     )
-                    if not error:
-                        json_result = _try_formatter_fallback(json_result, json_result)
+                    # Always route the raw step-1 reasoning through the fine-tuned
+                    # formatter.  Step-2 (qwen as its own formatter) often produces
+                    # valid-but-all-zero JSON when the model ignores the format
+                    # instruction, which blocks the formatter's normal invalid-JSON
+                    # trigger.  Passing step1_raw lets the formatter extract the
+                    # actual classification signal even in that case.
+                    if step1_raw:
+                        fmt_result = _try_formatter_fallback('{"1":"e"}', step1_raw)
+                        if fmt_result != '{"1":"e"}':
+                            json_result = fmt_result
+                        else:
+                            json_result = _try_formatter_fallback(json_result, json_result)
                     # CoVe not supported for Ollama two-step (already has verification)
                 else:
                     messages = build_text_classification_prompt(
