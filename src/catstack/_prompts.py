@@ -49,7 +49,12 @@ Step 3 — Rank: Sum the frequency counts within each cluster. Output the top {m
 Categories (sorted by extraction frequency):
 {seed_with_counts}
 
-Return ONLY a numbered list of {max_categories} categories.
+Return ONLY a numbered list of {max_categories} categories. Each line must follow this exact format:
+N. Category Label (such as example 1, example 2, example 3)
+
+Example:
+1. Financial Pressures (such as rising costs, budget constraints, or loss of income)
+2. Location or Environment (such as moving to a new city, neighborhood quality, or proximity to amenities)
 """.strip()
 
 
@@ -78,7 +83,12 @@ Step 3 — Rank: Sum the frequency counts within each cluster. Output the top {m
 Categories (sorted by extraction frequency):
 {seed_with_counts}
 
-Return ONLY a numbered list of {max_categories} categories.
+Return ONLY a numbered list of {max_categories} categories. Each line must follow this exact format:
+N. Category Label (such as example 1, example 2, example 3)
+
+Example:
+1. Financial Pressures (such as rising rent, job loss, or inability to afford housing)
+2. Proximity to Family (such as moving closer to parents, children, or extended relatives)
 """.strip()
 
 

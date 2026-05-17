@@ -50,9 +50,9 @@ def _clean_label(label: str) -> str:
         "Emotional Support: 3"                     -> "Emotional Support"
         "emotional support"                         -> "emotional support"
     """
-    label = label.replace("**", "")              # remove bold markers
-    label = re.sub(r"\s*\([^)]*\)", "", label)   # remove parenthetical notes
-    label = re.sub(r"\s*:\s*\d+\s*$", "", label) # remove trailing ": N" counts
+    label = label.replace("**", "")                        # remove bold markers
+    label = re.sub(r"\s*\(\s*\d+\s*\)", "", label)        # remove count-only parens like "(3)"
+    label = re.sub(r"\s*:\s*\d+\s*$", "", label)          # remove trailing ": N" counts
     return label.strip()
 
 

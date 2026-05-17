@@ -5,6 +5,24 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.22] - 2026-05-17
+
+### Fixed
+- **`_clean_label()` no longer strips "such as" clauses**: the regex that removed
+  parenthetical content was too broad, stripping descriptive phrases like
+  `(such as rising rent, job loss)` alongside count-only artifacts like `(3)`.
+  It now only removes parentheticals that contain a bare number, preserving
+  rich "such as" labels in the final merge output.
+
+### Changed
+- **Merge prompts now include a concrete output example**: both the neutral and
+  survey merge prompts show an explicit `N. Label (such as ...)` example line
+  and end with `"Each line must follow this exact format"`, making small models
+  (e.g. gpt-4o-mini) reliably produce verbose labels without instruction-following
+  failures.
+
+---
+
 ## [1.0.21] - 2026-05-17
 
 ### Added
