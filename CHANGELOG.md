@@ -5,6 +5,31 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.21] - 2026-05-17
+
+### Added
+- **`_ensure_dependencies()` in `_formatter.py`**: auto-installs `transformers`,
+  `torch`, `accelerate`, and `sentencepiece` on first use (~1.5 GB, one-time) instead
+  of raising an ImportError. Safe to call from non-TTY sessions (Rscript, CI).
+- **Lazy formatter loading**: the formatter model (~1 GB RAM) is no longer loaded at
+  startup. It is loaded into RAM only on the first malformed-JSON row encountered
+  during a run, saving memory and startup time when all rows parse cleanly.
+
+### Changed
+- **`json_formatter` default changed from `False` to `None`**: when `None`, the
+  formatter is auto-enabled for Ollama / local-model providers (which more often emit
+  malformed JSON) and disabled for all other providers. Pass `json_formatter=False`
+  explicitly to opt out, or `json_formatter=True` to force-enable for any provider.
+- **`ensure_formatter_available()`** no longer prompts interactively (`input()`
+  removed). It now auto-downloads the model and auto-installs deps, printing a clear
+  console warning instead. This makes it safe to call from R via `reticulate`.
+- **Merge prompt `name_instruction`**: the "such as / parenthetical examples" guidance
+  is now included in the default (non-specific) branch as a SHOULD instruction.
+  Previously only `specificity="specific"` got this guidance; now all callers do.
+  `specificity="specific"` upgrades it to MUST.
+
+---
+
 ## [1.0.20] - 2026-05-16
 
 ### Added

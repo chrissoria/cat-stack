@@ -2657,6 +2657,10 @@ Categorize text responses {cove_categorize}:
     def _try_formatter_fallback(json_result, raw_reply, chunk_categories=None):
         """Try the JSON formatter if extract_json produced invalid output.
 
+        Lazily loads the formatter model into RAM the first time this helper
+        is invoked with a real failure -- saves ~1 GB RAM + load time when
+        every row parses cleanly on the first try.
+
         Args:
             chunk_categories: When called from chunked classification, the
                 actual chunk category list (not the full list). Needed so the
@@ -2669,6 +2673,19 @@ Categorize text responses {cove_categorize}:
         is_valid, _ = validate_classification_json(json_result, n)
         if is_valid:
             return json_result
+
+        # Lazy load on first need
+        if not formatter_state.get("_loaded"):
+            print(
+                "\n[CatLLM] First malformed-JSON row encountered -- loading\n"
+                "  JSON formatter model into RAM now (one-time per session)."
+            )
+            fmt_model, fmt_tokenizer, fmt_device = formatter_state["_loader"]()
+            formatter_state["model"] = fmt_model
+            formatter_state["tokenizer"] = fmt_tokenizer
+            formatter_state["device"] = fmt_device
+            formatter_state["_loaded"] = True
+
         from ._formatter import run_formatter
         fixed_output = run_formatter(
             raw_reply, cats,

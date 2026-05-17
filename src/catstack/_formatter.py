@@ -42,6 +42,56 @@ def _check_dependencies():
         )
 
 
+def _ensure_dependencies(verbose: bool = True) -> bool:
+    """Ensure formatter Python dependencies are installed.
+
+    Tries to import torch/transformers/accelerate. If any are missing,
+    auto-installs them via pip after printing a clear warning about the
+    download size (~1.5 GB total). Returns True on success, False on
+    install failure.
+    """
+    try:
+        import torch  # noqa: F401
+        import transformers  # noqa: F401
+        import accelerate  # noqa: F401
+        return True
+    except ImportError:
+        pass
+
+    if verbose:
+        print(
+            "\n[CatLLM] JSON formatter dependencies (transformers, torch, "
+            "accelerate)\n"
+            "  are not installed in this Python environment. Installing now\n"
+            "  (~1.5 GB download; one-time). To skip this and disable the\n"
+            "  formatter, pass json_formatter=False."
+        )
+
+    import subprocess
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "--quiet",
+             "transformers", "torch", "accelerate", "sentencepiece"]
+        )
+    except subprocess.CalledProcessError as e:
+        if verbose:
+            print(
+                f"[CatLLM] Failed to install formatter dependencies ({e}).\n"
+                "  Install manually: pip install 'cat-llm[formatter]'"
+            )
+        return False
+
+    # Verify import works now
+    try:
+        import torch  # noqa: F401
+        import transformers  # noqa: F401
+        return True
+    except ImportError as e:
+        if verbose:
+            print(f"[CatLLM] Formatter deps installed but import failed: {e}")
+        return False
+
+
 def _is_model_cached() -> bool:
     """Check if the merged model is already in the HuggingFace cache."""
     try:
@@ -54,31 +104,29 @@ def _is_model_cached() -> bool:
 
 def ensure_formatter_available() -> bool:
     """
-    Ensure the formatter model is available, prompting to download if needed.
+    Ensure the formatter model and its Python dependencies are available.
+
+    Auto-installs deps (transformers/torch/accelerate, ~1.5 GB) on first use
+    and auto-downloads the formatter model (~1 GB) from HuggingFace on first
+    use. Both events print a clear warning to the console; neither prompts
+    interactively, so this function is safe to call from Rscript / non-TTY
+    sessions.
 
     Returns:
-        True if the formatter is ready to use, False if user declined download.
+        True if the formatter is ready to use, False on install failure.
     """
-    _check_dependencies()
+    if not _ensure_dependencies():
+        return False
 
     if _is_model_cached():
         return True
 
     print(
-        "\n[CatLLM] The JSON formatter model (~1GB) will be downloaded from\n"
+        "\n[CatLLM] Downloading JSON formatter model (~1 GB) from\n"
         f"  HuggingFace Hub ({_MERGED_MODEL_REPO}).\n"
         "  This is a one-time download — the model is cached locally after."
     )
-    try:
-        answer = input("  Continue? (Y/n): ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        answer = "n"
-
-    if answer in ("", "y", "yes"):
-        return True
-    else:
-        print("  -> JSON formatter disabled for this run.\n")
-        return False
+    return True  # actual download happens in load_formatter()
 
 
 def load_formatter(device=None):

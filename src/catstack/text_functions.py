@@ -854,13 +854,15 @@ def explore_common_categories(
 
     if specificity == "specific":
         name_instruction = (
-            "Prefer specific, descriptive labels over vague ones. "
-            "Each category name SHOULD include a brief clarifying phrase using "
-            "'such as' or parenthetical examples where helpful."
+            "Use specific, descriptive labels. "
+            "Each category name MUST include a clarifying phrase using "
+            "'such as' or parenthetical examples."
         )
     else:
         name_instruction = (
-            "Prefer specific, descriptive labels over vague ones."
+            "Prefer specific, descriptive labels over vague ones. "
+            "Each category name SHOULD include a brief clarifying phrase using "
+            "'such as' or parenthetical examples where helpful."
         )
 
     merge_template = get_prompt(domain, "merge")

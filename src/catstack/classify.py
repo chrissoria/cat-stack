@@ -7,7 +7,7 @@ supporting both single-model and multi-model (ensemble) classification.
 
 import math
 import warnings
-from typing import Union, Callable
+from typing import Union, Callable, Optional
 
 __all__ = [
     # Main entry point
@@ -91,7 +91,7 @@ def classify(
     auto_download: bool = False,
     add_other = "prompt",
     check_verbosity: bool = True,
-    json_formatter: bool = False,
+    json_formatter: Optional[bool] = None,
     embeddings: bool = False,
     category_descriptions: dict = None,
     embedding_tiebreaker: bool = False,
@@ -532,19 +532,51 @@ def classify(
         print()
 
     # =========================================================================
-    # JSON formatter fallback (opt-in)
+    # JSON formatter fallback
     # =========================================================================
+    # Auto-enable when Ollama (or any local model with colon-tag syntax) is in
+    # use, since small local models more often emit malformed classification
+    # JSON. Pass json_formatter=False explicitly to opt out.
+    def _uses_ollama_provider():
+        ms = (model_source or "").lower()
+        if ms == "ollama":
+            return True
+        if models:
+            for m in models:
+                provider = None
+                if isinstance(m, (list, tuple)) and len(m) >= 2:
+                    provider = m[1]
+                elif isinstance(m, dict):
+                    provider = m.get("provider")
+                if provider and str(provider).lower() == "ollama":
+                    return True
+        return False
+
+    if json_formatter is None:
+        json_formatter = _uses_ollama_provider()
+        if json_formatter:
+            print(
+                "\n[CatLLM] Ollama detected — auto-enabling JSON formatter fallback\n"
+                "  (small local models more often emit malformed JSON).\n"
+                "  Pass json_formatter=False to opt out."
+            )
+
+    # The formatter MODEL is loaded lazily on the first parse failure (saves
+    # ~1 GB RAM + load time when no rows actually need rescuing). The dep
+    # check + cache verification still run upfront -- that's the fast part
+    # and lets us cleanly disable the formatter if deps can't be installed.
     _formatter_state = None
     if json_formatter:
         try:
             from ._formatter import ensure_formatter_available, load_formatter
 
             if ensure_formatter_available():
-                fmt_model, fmt_tokenizer, fmt_device = load_formatter()
                 _formatter_state = {
-                    "model": fmt_model,
-                    "tokenizer": fmt_tokenizer,
-                    "device": fmt_device,
+                    "model": None,
+                    "tokenizer": None,
+                    "device": None,
+                    "_loaded": False,
+                    "_loader": load_formatter,
                 }
             else:
                 json_formatter = False
