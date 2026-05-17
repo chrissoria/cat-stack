@@ -248,29 +248,33 @@ def ollama_two_step_classify(
     survey_context = f"Context: {survey_question}." if survey_question else ""
 
     # ==========================================================================
-    # Step 1: Classification (natural language - focus on accuracy)
+    # Step 1: Classification (simple list of applicable categories)
     # ==========================================================================
+    # Weak models (local Ollama, lower-tier API models) can't reliably produce
+    # per-category YES/NO output OR strict JSON in one shot.  Ask for the
+    # simplest possible output — just the names of the applicable categories,
+    # one per line — and let the fine-tuned formatter (or step 2) slot those
+    # names into the indexed JSON schema.
     step1_messages = [
         {
             "role": "system",
-            "content": "You are an expert at categorizing text responses. Focus on accurate classification."
+            "content": "You are an expert at categorizing text. You read a response and pick the categories that apply."
         },
         {
             "role": "user",
             "content": f"""{survey_context}
 
-Analyze this text response and determine which categories apply:
+Read this text response:
 
-Response: "{response_text}"
+"{response_text}"
 
-Categories:
+Decide which of these categories apply to the response:
+
 {categories_str}
 
-For each category, explain briefly whether it applies (YES) or not (NO) to this response.
-Format your answer as:
-1. [Category name]: YES/NO - [brief reason]
-2. [Category name]: YES/NO - [brief reason]
-...and so on for all categories."""
+Output ONLY the names of the categories that apply, one per line.
+Write nothing else — no numbering, no reasoning, no JSON, no markdown.
+If none apply, write the single word: None"""
         }
     ]
 
@@ -293,24 +297,34 @@ Format your answer as:
     # ==========================================================================
     example_json = json.dumps({str(i): "0" for i in range(1, num_categories + 1)})
 
+    # Numbered category list for step 2 — the formatter needs to map each
+    # name in step1_reply back to its position in the original list.
+    numbered_categories = "\n".join(
+        f"{i + 1}. {c}" for i, c in enumerate(categories)
+    )
+
     for attempt in range(max_retries):
         step2_messages = [
             {
                 "role": "system",
-                "content": "You convert classification results to JSON. Output ONLY valid JSON, nothing else."
+                "content": "You convert a list of category names to a JSON object marking which categories were selected. Output ONLY valid JSON, nothing else."
             },
             {
                 "role": "user",
-                "content": f"""Convert this classification to JSON format.
+                "content": f"""Categories (numbered 1 to {num_categories}):
+{numbered_categories}
 
-Classification results:
+Selected categories (the names that were chosen — may be a subset, all, or none):
 {step1_reply}
+
+Output a JSON object where each key is a category number ("1" through "{num_categories}")
+and each value is "1" if that category appears in the selected list, "0" if not.
 
 Rules:
 - Output ONLY a JSON object, no other text
-- Use category numbers as keys (1, 2, 3, etc.)
-- Use "1" if the category was marked YES, "0" if NO
-- Include ALL {num_categories} categories
+- Include ALL {num_categories} categories as keys
+- Match by category name (allow partial / case-insensitive matches)
+- If the selected list says "None" or is empty, all values are "0"
 
 Example format:
 {example_json}

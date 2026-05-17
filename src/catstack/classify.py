@@ -92,6 +92,7 @@ def classify(
     add_other = "prompt",
     check_verbosity: bool = True,
     json_formatter: Optional[bool] = None,
+    two_step_classify: Optional[bool] = None,
     embeddings: bool = False,
     category_descriptions: dict = None,
     embedding_tiebreaker: bool = False,
@@ -202,6 +203,19 @@ def classify(
             produces invalid output — zero cost on the happy path. On first
             use, the model (~1GB) is downloaded from HuggingFace Hub.
             Requires: pip install cat-llm[formatter]. Default False.
+            Auto-enabled when two_step_classify is True (or when any model in
+            `models` uses the Ollama provider).
+        two_step_classify (bool): Split classification into two LLM calls:
+            (1) natural-language reasoning, then (2) JSON formatting.  More
+            reliable for weaker models — local Ollama models, but also lower-
+            tier API models (gpt-4o-mini, claude-haiku, gemini-flash) that
+            struggle to produce strict per-category JSON in a single shot.
+            When enabled, the raw step-1 reasoning is routed through the
+            fine-tuned JSON formatter (json_formatter is auto-enabled).
+            Default None: auto-enable for Ollama models, disable otherwise.
+            Set True to force it on any provider; False to disable for Ollama.
+            Per-model override is also supported via the 4-tuple options dict:
+                ("gpt-4o-mini", "openai", key, {"two_step_classify": True})
         embeddings (bool): If True, add embedding-based similarity scores
             alongside binary 0/1 classifications. Uses a local sentence-
             transformer model (BAAI/bge-small-en-v1.5, ~130MB) to compute
@@ -553,13 +567,22 @@ def classify(
         return False
 
     if json_formatter is None:
-        json_formatter = _uses_ollama_provider()
-        if json_formatter:
+        if two_step_classify is True:
+            json_formatter = True
             print(
-                "\n[CatLLM] Ollama detected — auto-enabling JSON formatter fallback\n"
-                "  (small local models more often emit malformed JSON).\n"
+                "\n[CatLLM] two_step_classify=True — auto-enabling JSON formatter\n"
+                "  (the formatter receives the step-1 reasoning text and is what\n"
+                "  makes the two-step path actually more accurate than one-shot).\n"
                 "  Pass json_formatter=False to opt out."
             )
+        else:
+            json_formatter = _uses_ollama_provider()
+            if json_formatter:
+                print(
+                    "\n[CatLLM] Ollama detected — auto-enabling JSON formatter fallback\n"
+                    "  (small local models more often emit malformed JSON).\n"
+                    "  Pass json_formatter=False to opt out."
+                )
 
     # The formatter MODEL is loaded lazily on the first parse failure (saves
     # ~1 GB RAM + load time when no rows actually need rescuing). The dep
@@ -832,6 +855,7 @@ def classify(
         save_directory=save_directory,
         progress_callback=progress_callback,
         formatter_state=_formatter_state,
+        two_step_classify=two_step_classify,
         multi_label=multi_label,
         categories_per_call=categories_per_call,
         embedding_tiebreaker_state=_embedding_tiebreaker_state,

@@ -575,7 +575,11 @@ def _format_creativity_suffix(creativity) -> str:
     return f"_t{int(round(creativity * 100))}"
 
 
-def prepare_model_configs(models: list, auto_download: bool = False) -> list:
+def prepare_model_configs(
+    models: list,
+    auto_download: bool = False,
+    two_step_classify: Optional[bool] = None,
+) -> list:
     """
     Validate and prepare model configurations.
 
@@ -583,8 +587,14 @@ def prepare_model_configs(models: list, auto_download: bool = False) -> list:
         models: List of tuples. Each tuple can be:
             - (model, provider, api_key) — 3 elements
             - (model, provider, api_key, options) — 4 elements, where options is a
-              dict with per-model overrides (e.g. {"creativity": 0.5})
+              dict with per-model overrides (e.g. {"creativity": 0.5,
+              "two_step_classify": True})
         auto_download: If True, automatically download missing Ollama models
+        two_step_classify: Global override for the two-step classify mode.
+            None (default) → auto-enable for Ollama, off for everything else.
+            True → enable for all models (useful for weaker API models that
+            also struggle with strict JSON). False → never use it.
+            Per-model overrides via the options dict take precedence.
 
     Returns:
         List of config dicts with validated settings
@@ -690,6 +700,18 @@ def prepare_model_configs(models: list, auto_download: bool = False) -> list:
         # Per-model creativity override (None means use global)
         per_model_creativity = options.get("creativity", None) if options else None
 
+        # Resolve two-step setting.  Precedence:
+        #   1. per-model option override  (options["two_step_classify"])
+        #   2. global parameter override   (two_step_classify=)
+        #   3. auto-detect: True iff provider is Ollama
+        per_model_two_step = options.get("two_step_classify", None) if options else None
+        if per_model_two_step is not None:
+            effective_two_step = bool(per_model_two_step)
+        elif two_step_classify is not None:
+            effective_two_step = bool(two_step_classify)
+        else:
+            effective_two_step = (detected_provider == "ollama")
+
         # Build sanitized column name
         base_name = sanitize_model_name(model)
         if is_ensemble:
@@ -699,7 +721,7 @@ def prepare_model_configs(models: list, auto_download: bool = False) -> list:
             "model": model,
             "provider": detected_provider,
             "api_key": api_key,
-            "use_two_step": (detected_provider == "ollama"),
+            "use_two_step": effective_two_step,
             "sanitized_name": base_name,
             "creativity": per_model_creativity,
         })
@@ -2274,6 +2296,8 @@ def classify_ensemble(
     auto_download: bool = False,
     # JSON formatter fallback
     formatter_state: dict = None,
+    # Two-step classify (text-first then format). None = auto-detect for Ollama.
+    two_step_classify: Optional[bool] = None,
     # Label mode
     multi_label: bool = True,
     # Chunked classification
@@ -2483,7 +2507,11 @@ def classify_ensemble(
 
     # Prepare model configurations
     print(f"Validating {len(models)} model configuration(s)...")
-    model_configs = prepare_model_configs(models, auto_download=auto_download)
+    model_configs = prepare_model_configs(
+        models,
+        auto_download=auto_download,
+        two_step_classify=two_step_classify,
+    )
 
     # Print model info
     print(f"\nModels to use:")
@@ -2934,7 +2962,7 @@ Categorize text responses {cove_categorize}:
             else:
                 response_text = item
 
-                if cfg["use_two_step"]:  # Ollama
+                if cfg["use_two_step"]:  # Ollama (or two_step_classify=True)
                     json_result, step1_raw, error = ollama_two_step_classify(
                         client=client,
                         response_text=response_text,
@@ -2944,18 +2972,28 @@ Categorize text responses {cove_categorize}:
                         creativity=effective_creativity,
                         max_retries=max_retries,
                     )
-                    # Always route the raw step-1 reasoning through the fine-tuned
-                    # formatter.  Step-2 (qwen as its own formatter) often produces
-                    # valid-but-all-zero JSON when the model ignores the format
-                    # instruction, which blocks the formatter's normal invalid-JSON
-                    # trigger.  Passing step1_raw lets the formatter extract the
-                    # actual classification signal even in that case.
-                    if step1_raw:
+                    # Normal path: step 2 (qwen as formatter) usually maps the
+                    # step-1 list correctly. Only fall back to the fine-tuned
+                    # formatter when step 2 returned all-zeros AND step 1 said
+                    # something non-empty — that combination signals step 2
+                    # silently lost the classification signal (the original bug).
+                    # Overriding a confident, non-zero step-2 result with the
+                    # formatter's interpretation of messy step-1 text loses
+                    # accuracy in the common case.
+                    def _is_all_zero(js):
+                        try:
+                            d = json.loads(js)
+                            return all(str(v) == "0" for v in d.values())
+                        except Exception:
+                            return False
+
+                    step1_meaningful = step1_raw and step1_raw.strip().lower() not in ("", "none")
+                    if step1_meaningful and _is_all_zero(json_result):
                         fmt_result = _try_formatter_fallback('{"1":"e"}', step1_raw)
                         if fmt_result != '{"1":"e"}':
                             json_result = fmt_result
-                        else:
-                            json_result = _try_formatter_fallback(json_result, json_result)
+                    elif error or not json_result:
+                        json_result = _try_formatter_fallback(json_result or '{"1":"e"}', step1_raw or "")
                     # CoVe not supported for Ollama two-step (already has verification)
                 else:
                     messages = build_text_classification_prompt(
