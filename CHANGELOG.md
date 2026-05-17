@@ -5,6 +5,27 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.20] - 2026-05-16
+
+### Added
+- **Domain-keyed prompt registry** (`_prompts.py`): introduces a `PROMPTS` dict keyed
+  by domain (`"neutral"`, `"survey"`, `"social"`, `"academic"`, `"policy"`, `"web"`),
+  each with overrideable `"first_pass"` and `"merge"` prompt slots. A `get_prompt(domain,
+  slot)` helper falls back to `"neutral"` for any slot a domain does not override.
+
+### Changed
+- **`extract()` and `explore()`** accept a new `domain: str = "neutral"` parameter.
+  Passing `domain=...` selects the corresponding prompt template for both the per-chunk
+  first-pass extraction and the second-pass semantic merge.
+- **Default prompt is now domain-neutral**: previously both functions rendered the
+  survey-flavored prompt (`"respondent"`, `"reason a respondent might give"`) for all
+  callers. Now callers that do not pass `domain=...` receive a truly generic template.
+  Callers relying on the old survey language should pass `domain="survey"` explicitly.
+- **`explore_common_categories()`** accepts `domain: str = "neutral"` and routes both
+  inline prompts through `get_prompt()` instead of hardcoding them.
+
+---
+
 ## [1.0.19] - 2026-05-11
 
 ### Changed
