@@ -73,6 +73,7 @@ from ._providers import (
     OLLAMA_MODEL_SIZES,
 )
 from ._utils import _clean_label
+from ._prompts import get_prompt
 
 
 # =============================================================================
@@ -525,6 +526,7 @@ def explore_common_categories(
     chunk_delay: float = 0.0,
     auto_download: bool = False,
     max_workers: int = 1,
+    domain: str = "neutral",
     # Legacy parameter names for backward compatibility
     user_model: str = None,
     model_source: str = None,
@@ -687,13 +689,16 @@ def explore_common_categories(
     else:
         system_content = "You are a helpful assistant that extracts categories from text responses."
 
+    first_pass_template = get_prompt(domain, "first_pass")
+
     def make_prompt(responses_blob: str) -> str:
         focus_text = f" Focus specifically on {focus}." if focus else ""
-        return (
-            f'Identify {categories_per_chunk} {specificity} categories of responses to the question "{survey_question}" '
-            f"in the following list of responses.{focus_text} Responses are separated by semicolons. "
-            f"Responses are within triple backticks: ```{responses_blob}``` "
-            f"Number your categories from 1 through {categories_per_chunk} and provide concise labels only (no descriptions)."
+        return first_pass_template.format(
+            categories_per_chunk=categories_per_chunk,
+            specificity=specificity,
+            context=survey_question,
+            focus_text=focus_text,
+            items_blob=responses_blob,
         )
 
     # Parse numbered list
@@ -858,22 +863,13 @@ def explore_common_categories(
             "Prefer specific, descriptive labels over vague ones."
         )
 
-    second_prompt = f"""
-You are consolidating categories extracted from survey responses to: "{survey_context}"
-
-Task: Reduce to {max_categories} categories.
-
-Step 1 — Cluster: Group the categories below into clusters where each cluster represents ONE distinct reason a respondent might give. Categories that describe the same reason using different words or from different angles belong in the same cluster. For example, a category about relationship quality and a category about emotional closeness likely belong together if they reflect the same underlying reason.
-
-Step 2 — Label: For each cluster, choose the single label that best captures the shared meaning. {name_instruction}
-
-Step 3 — Rank: Sum the frequency counts within each cluster. Output the top {max_categories} clusters by total count.
-
-Categories (sorted by extraction frequency):
-{seed_with_counts}
-
-Return ONLY a numbered list of {max_categories} categories.
-""".strip()
+    merge_template = get_prompt(domain, "merge")
+    second_prompt = merge_template.format(
+        context=survey_context,
+        max_categories=max_categories,
+        name_instruction=name_instruction,
+        seed_with_counts=seed_with_counts,
+    )
 
     # Second pass call
     reply2, error2 = client.complete(

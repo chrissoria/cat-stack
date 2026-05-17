@@ -34,6 +34,7 @@ def explore(
     chunk_delay: float = 0.0,
     auto_download: bool = False,
     max_workers: int = 1,
+    domain: str = "neutral",
 ):
     """
     Explore categories in text data, returning the raw extracted list.
@@ -107,6 +108,7 @@ def explore(
         chunk_delay=chunk_delay,
         auto_download=auto_download,
         max_workers=max_workers,
+        domain=domain,
     )
 
     if filename:

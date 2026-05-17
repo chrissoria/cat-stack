@@ -60,6 +60,7 @@ def extract(
     chunk_delay: float = 0.0,
     auto_download: bool = False,
     input_mode=None,
+    domain: str = "neutral",
 ):
     """
     Unified category extraction function for text, image, and PDF inputs.
@@ -175,6 +176,7 @@ def extract(
             progress_callback=progress_callback,
             chunk_delay=chunk_delay,
             auto_download=auto_download,
+            domain=domain,
         )
 
     elif input_type == "image":
