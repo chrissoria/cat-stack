@@ -5,6 +5,17 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-05-18
+
+### Improved
+- **`prompt_tune()` — attempt history format simplified**: dropped score numbers
+  from the history section (not useful for small models), capped at last 3
+  attempts to avoid prompt bloat, and reworded to a direct imperative
+  ("write something different") rather than a negation list ("do not repeat
+  these"), which is harder for smaller models to follow.
+
+---
+
 ## [1.2.0] - 2026-05-17
 
 ### Added — wrapper-friendly public helpers
