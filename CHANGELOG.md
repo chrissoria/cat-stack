@@ -5,6 +5,23 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-05-18
+
+### Added
+- **`catstack.classify_indicators(input_data, categories, *, short_labels=True,
+  return_full=False, **kwargs)`** — sibling to `classify_labels` that returns
+  per-category 0/1 indicator lists instead of one collapsed label per row.
+  Shape: `dict[short_label, list[int]]`, length-`len(input_data)` per key.
+  Use this for language wrappers that want one indicator variable per
+  category (Stata's wide mode, future R `as_indicators=TRUE` mode), matching
+  the wide DataFrame Python users see directly from `classify()`. Same
+  centralized schema canary as `classify_labels` — raises `RuntimeError`
+  once if neither `category_N` nor `category_N_consensus` columns appear.
+
+Pure-additive release; no existing signatures or behavior change.
+
+---
+
 ## [1.3.0] - 2026-05-18
 
 ### Improved

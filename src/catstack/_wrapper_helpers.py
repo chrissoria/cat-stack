@@ -328,3 +328,101 @@ def classify_labels(
     if return_full:
         return labels_per_row, df
     return labels_per_row
+
+
+def classify_indicators(
+    input_data,
+    categories,
+    *,
+    short_labels: bool = True,
+    return_full: bool = False,
+    **kwargs,
+):
+    """Convenience wrapper around `classify()` returning per-category indicators.
+
+    Like `classify_labels`, but instead of collapsing the wide DataFrame to
+    one assigned label per row, it returns a dict mapping each category to
+    a list of 0/1 indicators of length `len(input_data)`.
+
+    This is the right shape for language wrappers that want one indicator
+    variable per category (Stata's wide mode, future R `as_indicators=TRUE`
+    mode) instead of a single label per row.
+
+    Args:
+        input_data: Same as `classify()`.
+        categories: Same as `classify()` — list of category strings.
+        short_labels: If True (default), use `short_label()` on each
+            category to produce dict keys (`"Positive: defn"` → `"Positive"`).
+            If False, the dict keys are the full category strings.
+        return_full: If True, return `(indicators_dict, df)` so callers also
+            have access to the underlying DataFrame.  Default False.
+        **kwargs: All other kwargs are forwarded to `classify()`.
+
+    Returns:
+        dict[str, list[int]]: keys are category labels (short or full),
+        values are 0/1 lists of length `len(input_data)`.  In ensemble mode
+        the indicators come from the `category_N_consensus` columns; in
+        single-model mode from `category_N`.
+        Or `(dict, df)` tuple if `return_full=True`.
+
+    Raises:
+        RuntimeError: if `classify()` returns a DataFrame that contains
+            neither `category_N` nor `category_N_consensus` columns
+            (centralized schema canary, same trigger as `classify_labels`).
+
+    Example:
+        >>> indicators = classify_indicators(
+        ...     ["I moved for the job and to be near family.",
+        ...      "Lower cost of living was the only reason."],
+        ...     ["Job: career", "Family: relationships", "Cost: affordability"],
+        ...     api_key="...", user_model="gpt-4o-mini",
+        ... )
+        >>> indicators
+        {'Job': [1, 0], 'Family': [1, 0], 'Cost': [0, 1]}
+    """
+    # Reuse classify_labels for the df + centralized schema canary.  We
+    # pass short_labels=False because we want the raw df; we apply our own
+    # short_label() to the dict keys below.
+    _labels, df = classify_labels(
+        input_data,
+        categories,
+        short_labels=False,
+        return_full=True,
+        **kwargs,
+    )
+
+    cols = list(df.columns)
+    indexed: List[Tuple[int, str]] = []
+    for c in cols:
+        m = _CONSENSUS_COL_PAT.match(c)
+        if m:
+            indexed.append((int(m.group(1)), c))
+    if not indexed:
+        for c in cols:
+            m = _SINGLE_COL_PAT.match(c)
+            if m:
+                indexed.append((int(m.group(1)), c))
+    # classify_labels already raised RuntimeError if neither family is
+    # present, so we know `indexed` is non-empty here.
+    indexed.sort(key=lambda t: t[0])
+
+    keys = [short_label(c) if short_labels else c for c in categories]
+
+    out: Dict[str, List[int]] = {}
+    for n, col in indexed:
+        cat_idx = n - 1
+        if not (0 <= cat_idx < len(keys)):
+            continue
+        key = str(keys[cat_idx])
+        series = df[col]
+        values: List[int] = []
+        for v in series:
+            try:
+                values.append(1 if int(v) == 1 else 0)
+            except (ValueError, TypeError):
+                values.append(0)
+        out[key] = values
+
+    if return_full:
+        return out, df
+    return out

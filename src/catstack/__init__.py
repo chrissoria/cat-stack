@@ -92,6 +92,7 @@ from ._wrapper_helpers import (
     parse_models_string,
     short_label,
     classify_labels,
+    classify_indicators,
 )
 
 # Define public API
@@ -144,4 +145,5 @@ __all__ = [
     "parse_models_string",
     "short_label",
     "classify_labels",
+    "classify_indicators",
 ]
