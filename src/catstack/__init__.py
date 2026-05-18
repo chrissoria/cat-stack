@@ -83,6 +83,17 @@ from .image_functions import (
     image_features,
 )
 
+# =============================================================================
+# Wrapper helpers (for thin language bindings: Stata, future Julia/CLI)
+# =============================================================================
+from ._wrapper_helpers import (
+    get_backend,
+    parse_kwargs_string,
+    parse_models_string,
+    short_label,
+    classify_labels,
+)
+
 # Define public API
 __all__ = [
     # Batch mode exceptions
@@ -127,4 +138,10 @@ __all__ = [
     "build_json_schema",
     "extract_json",
     "validate_classification_json",
+    # Wrapper helpers (for thin language bindings)
+    "get_backend",
+    "parse_kwargs_string",
+    "parse_models_string",
+    "short_label",
+    "classify_labels",
 ]

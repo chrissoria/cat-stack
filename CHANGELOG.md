@@ -5,6 +5,45 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-05-17
+
+### Added — wrapper-friendly public helpers
+Five new public helpers in `catstack._wrapper_helpers` (re-exported at the
+top level) so thin language wrappers — Stata today, future Julia / CLI
+bindings — can stop re-implementing the same string-parsing and output-
+shaping logic. R users can opt in too; the existing R wrapper continues to
+work unchanged.
+
+- **`catstack.classify_labels(input_data, categories, *, short_labels=True,
+  multi_label_sep="; ", return_full=False, **kwargs)`** — load-bearing
+  convenience helper. Runs `classify()` and collapses the wide DataFrame
+  to one assigned label per row. Default `short_labels=True` strips
+  `"Positive: definition..."` → `"Positive"`. When `multi_label=True`
+  produces more than one match per row, the matches are joined with
+  `multi_label_sep` instead of being silently dropped — fixes a multi-label
+  data-loss bug in the previous Stata wrapper which kept only the first
+  match. Raises `RuntimeError` once if neither `category_N` nor
+  `category_N_consensus` columns are present (centralized schema canary).
+- **`catstack.get_backend(domain)`** — resolves a domain shortform
+  (`"pol"`, `"vader"`, `"ademic"`, `"survey"`, `"cog"`, `"web"`) to its
+  Python module. Empty/None returns base `catstack`. Unknown domain
+  raises `ValueError` listing valid values; missing domain package raises
+  `ImportError` with the exact `catllm setup, domain(X)` fix.
+- **`catstack.parse_kwargs_string(s)`** — quote- and bracket-aware parser
+  for `"k=v, k=v"` strings, with `ast.literal_eval` value parsing and
+  string fallback. Powers Stata's `pyoptions()` escape hatch.
+- **`catstack.parse_models_string(s, default_api_key=None)`** — parser for
+  `"model provider key; model provider key"` ensemble strings. 2-token
+  entries inherit `default_api_key`. Powers Stata's `models()` option.
+- **`catstack.short_label(s)`** — `"Label: definition"` → `"Label"`.
+  Standalone helper for callers that want the colon-split convenience
+  without going through `classify_labels`.
+
+Pure-additive release: no existing signatures or behavior change. Python
+and R users see the same API they did in 1.1.3.
+
+---
+
 ## [1.1.3] - 2026-05-17
 
 ### Improved
