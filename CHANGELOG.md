@@ -5,6 +5,27 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-05-17
+
+### Improved
+- **`prompt_tune()` — holdout split for unbiased scoring**: corrections are now
+  split into a train set (used to generate meta-LLM error examples) and a
+  held-out set (used exclusively for keep/revert scoring decisions). Previously,
+  the same items used for correction were also used to score improvement, risking
+  prompt overfitting to the sample. The split is `floor(n/3)` items held out,
+  minimum 2.
+- **`prompt_tune()` — attempt history passed to meta-LLM**: each call to
+  `_generate_category_instruction()` now receives the full history of previous
+  instructions tried for that category (instruction text, outcome, and score
+  delta). This prevents the meta-LLM from regenerating identical or structurally
+  similar instructions across attempts.
+- **`prompt_tune()` — state restore on regression**: when an instruction
+  regresses the holdout score, the train/holdout correction context is restored
+  to the pre-attempt state so the next meta-LLM call sees accurate current errors
+  rather than errors from the failed attempt.
+
+---
+
 ## [1.1.1] - 2026-05-17
 
 ### Fixed
