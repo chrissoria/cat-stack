@@ -749,17 +749,17 @@ def _generate_category_instruction(
     # Current instruction
     current_text = f'\nCURRENT INSTRUCTION FOR THIS CATEGORY:\n"{current_instruction}"\n' if current_instruction else ""
 
-    # History of previous attempts for this category so the meta-LLM doesn't repeat itself
+    # History of previous attempts — capped at last 3 to avoid prompt bloat.
+    # Format is deliberately simple (no score numbers) so smaller models can follow it.
     history_text = ""
     if attempt_history:
-        history_lines = []
-        for i, h in enumerate(attempt_history, 1):
-            history_lines.append(
-                f'  Attempt {i}: "{h["instruction"]}"'
-                f' → {h["outcome"]} (holdout score {h["score_before"]:.2f}→{h["score_after"]:.2f})'
-            )
+        recent = attempt_history[-3:]
+        history_lines = [
+            f'  - "{h["instruction"]}" [{h["outcome"]}]'
+            for h in recent
+        ]
         history_text = (
-            "\nPREVIOUS ATTEMPTS FOR THIS CATEGORY — do not repeat these:\n"
+            "\nPREVIOUS INSTRUCTIONS TRIED FOR THIS CATEGORY (already tested — write something different):\n"
             + "\n".join(history_lines)
             + "\n"
         )
