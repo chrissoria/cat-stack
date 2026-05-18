@@ -15,7 +15,6 @@ at the per-category level:
 Categories are never modified — only the system prompt changes.
 """
 
-import random as _random
 from typing import Union
 
 from ._category_analysis import has_other_category
@@ -289,39 +288,27 @@ def prompt_tune(
         }
 
     corrections = result["corrections"]
+    metrics = result["metrics"]
     total_flips = result["total_flips"]
     sample_indices = result["sample_indices"]
 
-    # Split corrections into train (meta-LLM error examples) and holdout
-    # (unbiased scoring — the model never optimizes against these items).
-    n_holdout = max(2, len(sample_indices) // 3)
-    n_train = len(sample_indices) - n_holdout
-    _rng = _random.Random(42)
-    _perm = list(range(len(sample_indices)))
-    _rng.shuffle(_perm)
-    train_pos = _perm[:n_train]
-    holdout_pos = _perm[n_train:]
+    # Save ground truth from user corrections for auto-scoring later iterations
+    ground_truth = {
+        i: c["corrected"] for i, c in zip(sample_indices, corrections)
+    }
 
-    train_corrections = [corrections[i] for i in train_pos]
-    holdout_corrections = [corrections[i] for i in holdout_pos]
-    ground_truth = {sample_indices[i]: corrections[i]["corrected"] for i in range(len(sample_indices))}
+    per_cat = _compute_per_category_metrics(corrections, categories)
+    baseline_target = _target_fn(metrics)
 
-    holdout_metrics = compute_metrics(holdout_corrections)
-    baseline_target = _target_fn(holdout_metrics)
-    holdout_flips = sum(len(c["changed"]) for c in holdout_corrections)
-
-    train_per_cat = _compute_per_category_metrics(train_corrections, categories)
-    holdout_per_cat = _compute_per_category_metrics(holdout_corrections, categories)
-
-    print(f"\n  Split: {n_train} items for optimization · {n_holdout} held out for unbiased scoring")
-    _print_classification_summary("Baseline (holdout)", holdout_metrics, holdout_per_cat, categories, holdout_flips)
+    # Print baseline summary
+    _print_classification_summary("Baseline", metrics, per_cat, categories, total_flips)
 
     baseline_data = {
         "label": "baseline",
         "system_prompt": "",
-        "metrics": holdout_metrics,
-        "per_category": holdout_per_cat,
-        "total_flips": holdout_flips,
+        "metrics": metrics,
+        "per_category": per_cat,
+        "total_flips": total_flips,
     }
     iterations = [baseline_data]
 
@@ -332,39 +319,32 @@ def prompt_tune(
         print("\n  All classifications correct — no tuning needed.")
     else:
         # ── Step 2: Iterate through each error category ──────────────
-        # Use train errors to identify which categories need work (more data than holdout)
         cats_with_errors = sorted(
-            [cat for cat in categories if train_per_cat[cat]["fp"] > 0 or train_per_cat[cat]["fn"] > 0],
-            key=lambda c: train_per_cat[c]["fp"] + train_per_cat[c]["fn"],
+            [cat for cat in categories if per_cat[cat]["fp"] > 0 or per_cat[cat]["fn"] > 0],
+            key=lambda c: per_cat[c]["fp"] + per_cat[c]["fn"],
             reverse=True,
         )
 
         print(f"\n  Categories with errors ({len(cats_with_errors)}): {', '.join(cats_with_errors)}")
 
         for cat_idx, target_cat in enumerate(cats_with_errors, 1):
-            cat_errors = train_per_cat[target_cat]["fp"] + train_per_cat[target_cat]["fn"]
+            cat_errors = per_cat[target_cat]["fp"] + per_cat[target_cat]["fn"]
             print(f"\n{'─' * 60}")
-            print(f"  Category {cat_idx}/{len(cats_with_errors)}: {target_cat} ({cat_errors} train errors)")
+            print(f"  Category {cat_idx}/{len(cats_with_errors)}: {target_cat} ({cat_errors} errors)")
             print(f"  Up to {max_iterations} iteration(s)")
 
-            attempt_history = []        # history of failed/succeeded instructions for this category
-            prev_holdout_score = baseline_target
+            attempt_history = []
+            prev_score = baseline_target
             prev_instruction = cat_instructions.get(target_cat, "")
 
             for attempt in range(1, max_iterations + 1):
                 print(f"\n    Attempt {attempt}/{max_iterations}...")
 
-                # Save state so we can restore train context if this attempt regresses
-                saved_train_corrections = train_corrections
-                saved_train_per_cat = train_per_cat
-                saved_holdout_corrections = holdout_corrections
-                saved_holdout_per_cat = holdout_per_cat
-
                 instruction = _generate_category_instruction(
                     target_category=target_cat,
-                    corrections=train_corrections,
+                    corrections=corrections,
                     categories=categories,
-                    per_cat=train_per_cat,
+                    per_cat=per_cat,
                     current_instruction=cat_instructions.get(target_cat, ""),
                     description=description,
                     survey_question=survey_question,
@@ -408,20 +388,18 @@ def prompt_tune(
                     current_prompt = _assemble_prompt(cat_instructions, categories)
                     break
 
-                # Split results: holdout drives keep/revert, train feeds next meta-LLM call
-                all_corr = result["corrections"]
-                train_corrections = [all_corr[i] for i in train_pos]
-                holdout_corrections = [all_corr[i] for i in holdout_pos]
-                holdout_metrics = compute_metrics(holdout_corrections)
-                holdout_flips = sum(len(c["changed"]) for c in holdout_corrections)
-                train_per_cat = _compute_per_category_metrics(train_corrections, categories)
-                holdout_per_cat = _compute_per_category_metrics(holdout_corrections, categories)
-                target_score = _target_fn(holdout_metrics)
+                corrections = result["corrections"]
+                metrics = result["metrics"]
+                total_flips = result["total_flips"]
+                target_score = _target_fn(metrics)
+                per_cat = _compute_per_category_metrics(corrections, categories)
 
-                # Classify outcome based on holdout score
-                if target_score > prev_holdout_score + 0.001:
+                new_cat_errors = per_cat[target_cat]["fp"] + per_cat[target_cat]["fn"]
+
+                # Classify outcome
+                if target_score > prev_score + 0.001:
                     outcome = "improved"
-                elif target_score < prev_holdout_score - 0.001:
+                elif target_score < prev_score - 0.001:
                     outcome = "regressed"
                 else:
                     outcome = "no_change"
@@ -429,55 +407,50 @@ def prompt_tune(
                 attempt_history.append({
                     "instruction": instruction,
                     "outcome": outcome,
-                    "score_before": prev_holdout_score,
+                    "score_before": prev_score,
                     "score_after": target_score,
                 })
 
                 _print_classification_summary(
-                    f"{target_cat} attempt {attempt} (holdout)", holdout_metrics, holdout_per_cat, categories, holdout_flips,
+                    f"{target_cat} attempt {attempt}", metrics, per_cat, categories, total_flips,
                 )
 
                 iterations.append({
                     "label": f"{target_cat} attempt {attempt}",
                     "system_prompt": current_prompt,
-                    "metrics": holdout_metrics,
-                    "per_category": holdout_per_cat,
-                    "total_flips": holdout_flips,
+                    "metrics": metrics,
+                    "per_category": per_cat,
+                    "total_flips": total_flips,
                 })
 
-                # Track best overall prompt by holdout score
+                # Track best overall
                 if target_score > best_target:
                     best_target = target_score
                     best_prompt = current_prompt
 
                 if outcome == "improved":
-                    print(f"    Improved: holdout score {prev_holdout_score:.2f} → {target_score:.2f}")
-                    prev_holdout_score = target_score
+                    print(f"    Improved: {target_cat} errors {cat_errors} → {new_cat_errors}")
+                    prev_score = target_score
                     prev_instruction = instruction
-                    cat_errors = train_per_cat[target_cat]["fp"] + train_per_cat[target_cat]["fn"]
-                    if holdout_flips == 0:
-                        print(f"    All errors fixed!")
+                    cat_errors = new_cat_errors
+                    if new_cat_errors == 0:
+                        print(f"    {target_cat}: all errors fixed!")
                         break
                 elif outcome == "no_change":
-                    print(f"    No change for {target_cat} (holdout score {target_score:.2f})")
+                    print(f"    No change for {target_cat} ({cat_errors} errors)")
                 else:
-                    print(f"    Regressed: holdout score {prev_holdout_score:.2f} → {target_score:.2f} — reverting")
+                    print(f"    Regressed: {target_cat} errors {cat_errors} → {new_cat_errors} — reverting")
                     if prev_instruction:
                         cat_instructions[target_cat] = prev_instruction
                     else:
                         cat_instructions.pop(target_cat, None)
                     current_prompt = _assemble_prompt(cat_instructions, categories)
-                    # Restore pre-attempt train context so next meta-LLM call sees accurate errors
-                    train_corrections = saved_train_corrections
-                    train_per_cat = saved_train_per_cat
-                    holdout_corrections = saved_holdout_corrections
-                    holdout_per_cat = saved_holdout_per_cat
 
-                if holdout_flips == 0:
+                if total_flips == 0:
                     print("\n  All classifications correct — stopping early!")
                     break
 
-            if holdout_flips == 0:
+            if total_flips == 0:
                 break
 
     # ── Step 3: Final validation ─────────────────────────────────────
