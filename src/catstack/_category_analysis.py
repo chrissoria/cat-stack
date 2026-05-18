@@ -19,13 +19,22 @@ __all__ = ["has_other_category", "check_category_verbosity"]
 _MAX_HEURISTIC_WORDS = 4
 
 # Tier 1: Anchored patterns — safe at any category length.
-# These only match when the keyword IS the category label itself.
+# These only match when the keyword IS the category label itself (or its prefix).
 _ANCHORED_PATTERNS = [
-    re.compile(r"^other\s*$", re.IGNORECASE),         # exact "Other"
-    re.compile(r"^other\s*[:(]", re.IGNORECASE),       # "Other: ...", "Other (..."
-    re.compile(r"^n/?a\s*$", re.IGNORECASE),           # exact "N/A", "NA"
-    re.compile(r"^miscellaneous\s*$", re.IGNORECASE),  # exact "Miscellaneous"
-    re.compile(r"^catch[\s-]?all\s*$", re.IGNORECASE), # exact "catch-all"
+    re.compile(r"^other\s*$", re.IGNORECASE),           # exact "Other"
+    re.compile(r"^other\s*[:(]", re.IGNORECASE),         # "Other: ...", "Other (..."
+    re.compile(r"^n/?a\s*$", re.IGNORECASE),             # exact "N/A", "NA"
+    re.compile(r"^miscellaneous\s*$", re.IGNORECASE),    # exact "Miscellaneous"
+    re.compile(r"^catch[\s-]?all\s*$", re.IGNORECASE),  # exact "catch-all"
+    # Sentiment/opinion contexts — "Neutral" serves as the ambivalent catch-all
+    re.compile(r"^neutral\s*$", re.IGNORECASE),          # exact "Neutral"
+    re.compile(r"^neutral\s*[:(]", re.IGNORECASE),       # "Neutral: ...", "Neutral (..."
+    # Other common ambivalent labels
+    re.compile(r"^ambiguous\s*$", re.IGNORECASE),        # exact "Ambiguous"
+    re.compile(r"^ambiguous\s*[:(]", re.IGNORECASE),     # "Ambiguous: ..."
+    re.compile(r"^unclear\s*$", re.IGNORECASE),          # exact "Unclear"
+    re.compile(r"^unclassified\s*$", re.IGNORECASE),     # exact "Unclassified"
+    re.compile(r"^unknown\s*$", re.IGNORECASE),          # exact "Unknown"
 ]
 
 # Tier 2: Phrase patterns — only applied to short categories (≤ _MAX_HEURISTIC_WORDS).
