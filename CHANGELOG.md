@@ -5,6 +5,48 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-05-17
+
+### Added
+- **`two_step_classify` parameter on `classify()`**: exposes the two-step
+  "natural language reasoning then JSON formatting" path that was previously
+  hardcoded for Ollama. Pass `True` to force it on any provider — useful for
+  lower-tier API models (gpt-4o-mini, claude-haiku, gemini-flash) that
+  struggle with strict per-category JSON in a single shot. Pass `False` to
+  disable, even for Ollama. Default `None` preserves the auto-enable-for-Ollama
+  behavior. Per-model override is also supported via the 4-tuple options dict:
+  `("gpt-4o-mini", "openai", key, {"two_step_classify": True})`. Setting
+  `two_step_classify=True` also auto-enables the fine-tuned JSON formatter.
+
+### Changed
+- **Step-1 prompt for two-step classify is now a simple category list**: the
+  prior YES/NO-per-category format was too structured for weak models (local
+  7B, lower-tier API), which regressed to partial JSON that step 2 silently
+  mapped to all-zeros. The new prompt asks for ONLY the names of the
+  applicable categories, one per line — the simplest possible output. Step 2
+  was updated to parse the list back into the indexed JSON schema.
+- **Default `creativity=0.0` for Ollama**: classification is not creative
+  generation. On qwen2.5:7b the temperature-0 default delivers +7pp accuracy
+  (78% → 85% on a 40-row sentiment benchmark) and produces bit-identical
+  output across runs. Users can still override by passing `creativity=`
+  explicitly. Cloud providers continue to use their own model defaults.
+
+### Fixed
+- **Fine-tuned JSON formatter now actually fires on lost step-1 signal**:
+  `ollama_two_step_classify()` now returns `(json_str, step1_raw, error)`
+  instead of `(json_str, error)`. The call site routes `step1_raw` through
+  the fine-tuned formatter when step-2 returned valid-but-all-zero JSON,
+  which is the original "Ollama returns nothing for clearly-classifiable
+  text" bug. The formatter is no longer overridden when step-2 produced a
+  confident non-zero result.
+
+### Benchmark
+- qwen2.5:7b sentiment classification, 40 verbose-label rows, 4 categories:
+  - Before all changes: ~40% accuracy (most failures: empty labels)
+  - After all changes: **85% accuracy**, fully deterministic
+
+---
+
 ## [1.0.22] - 2026-05-17
 
 ### Fixed
