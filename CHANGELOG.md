@@ -5,6 +5,19 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-05-17
+
+### Fixed
+- **`check_ollama_model()` false-positive partial match**: a request for
+  `qwen2.5:14b` would return True when only `qwen2.5:7b` was installed,
+  because the matcher checked whether the requested model started with the
+  installed model's family. `classify()` then proceeded with an effectively
+  uninstalled model and got per-row Ollama errors → silent "0 classified"
+  outcome. Now: explicit tags require an exact match; only family-only
+  requests (`"qwen2.5"`) are allowed to match any installed variant.
+
+---
+
 ## [1.1.0] - 2026-05-17
 
 ### Added

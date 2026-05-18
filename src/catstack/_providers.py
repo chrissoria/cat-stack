@@ -772,12 +772,17 @@ def check_ollama_model(model: str, host: str = "localhost", port: int = 11434) -
         True if model is available, False otherwise
     """
     available_models = list_ollama_models(host, port)
-    # Check for exact match or partial match (e.g., "llama3.2" matches "llama3.2:latest")
     model_lower = model.lower()
+    if ":" in model_lower:
+        # User specified an explicit tag (e.g. "qwen2.5:14b") — require exact
+        # match.  An installed "qwen2.5:7b" must NOT satisfy a request for
+        # "qwen2.5:14b"; the previous prefix-match logic let this through,
+        # which caused silent classification failures downstream.
+        return any(m.lower() == model_lower for m in available_models)
+    # User specified just the family (e.g. "llama3.2") — any installed
+    # variant of that family counts (e.g. "llama3.2:latest", "llama3.2:7b").
     return any(
-        model_lower == m.lower() or
-        m.lower().startswith(f"{model_lower}:") or
-        model_lower.startswith(m.lower().split(":")[0])
+        m.lower() == model_lower or m.lower().startswith(f"{model_lower}:")
         for m in available_models
     )
 
