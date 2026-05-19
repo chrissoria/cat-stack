@@ -84,7 +84,8 @@ def classify(
     parallel: bool = None,
     fail_strategy: str = "partial",
     max_retries: int = 5,
-    batch_retries: int = 2,
+    batch_retries: int = 1,
+    json_retries: int = 2,
     retry_delay: float = 1.0,
     row_delay: float = 0.0,
     pdf_dpi: int = 150,
@@ -183,7 +184,9 @@ def classify(
             (e.g., Ollama on limited hardware) or debugging.
         fail_strategy (str): How to handle failures - "partial" (default) or "strict".
         max_retries (int): Max retries per API call. Default 5.
-        batch_retries (int): Max retries for batch-level failures. Default 2.
+        batch_retries (int): Max retries for batch-level failures. Default 1.
+            Note: composes multiplicatively with json_retries — a row can hit
+            the LLM up to (1 + json_retries) * (1 + batch_retries) times.
         retry_delay (float): Delay between retries in seconds. Default 1.0.
         row_delay (float): Delay in seconds between processing each row. Useful
             when multiple models share the same API provider/key to avoid rate
@@ -407,6 +410,7 @@ def classify(
             fail_strategy=fail_strategy,
             max_retries=max_retries,
             batch_retries=batch_retries,
+            json_retries=json_retries,
             retry_delay=retry_delay,
             row_delay=row_delay,
             auto_download=auto_download,
@@ -849,6 +853,7 @@ def classify(
         fail_strategy=fail_strategy,
         max_retries=max_retries,
         batch_retries=batch_retries,
+        json_retries=json_retries,
         retry_delay=retry_delay,
         row_delay=row_delay,
         auto_download=auto_download,

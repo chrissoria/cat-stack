@@ -5,6 +5,28 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-05-18
+
+### Changed
+- **`batch_retries` default lowered from 2 to 1** in `classify()`, `classify_ensemble()`,
+  `summarize()`, and `summarize_ensemble()`. `batch_retries` and `json_retries`
+  compose multiplicatively — with the previous defaults, a stubbornly-failing
+  row could hit the LLM up to `(1 + 2) * (1 + 2) = 9` times. `batch_retries`
+  re-sends the identical prompt (unlike `json_retries`, which adds a
+  "respond with only valid JSON" nudge), so its rescue probability is low while
+  its cost in the failure tail is high. New worst case is `3 * 2 = 6` calls.
+  Callers depending on the old behavior can pass `batch_retries=2` explicitly.
+- Docstrings for `batch_retries` now spell out the multiplicative composition
+  with `json_retries`.
+
+### Added
+- `tests/test_json_retries.py` — unit tests covering `json_retries=0` (single
+  call), persistent-invalid retry exhaustion, early exit on valid JSON, and
+  the retry-nudge prompt injection. Uses `monkeypatch` on
+  `UnifiedLLMClient.complete` — no network calls.
+
+---
+
 ## [1.4.0] - 2026-05-18
 
 ### Added

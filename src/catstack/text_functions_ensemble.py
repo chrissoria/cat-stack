@@ -2277,7 +2277,8 @@ def classify_ensemble(
     fail_strategy: str = "partial",
     safety: bool = False,
     max_retries: int = 5,
-    batch_retries: int = 2,
+    batch_retries: int = 1,
+    json_retries: int = 2,
     retry_delay: float = 1.0,
     row_delay: float = 0.0,
     filename: str = None,
@@ -2368,8 +2369,10 @@ def classify_ensemble(
         max_retries: Maximum retry attempts for each API call (handles rate limits,
             server errors, timeouts). Default 5.
         batch_retries: Maximum retry passes for failed (row, model) pairs after
-            the batch completes. Default 2 means up to 3 total attempts. Set to 0
-            to disable batch-level retries.
+            the batch completes. Default 1 means up to 2 total attempts. Set to 0
+            to disable batch-level retries. Note: composes multiplicatively with
+            json_retries — a row can hit the LLM up to
+            (1 + json_retries) * (1 + batch_retries) times.
         retry_delay: Seconds to wait between batch retry passes.
 
         # Output parameters:
@@ -3009,35 +3012,59 @@ Categorize text responses {cove_categorize}:
                         multi_label=multi_label,
                         system_prompt=system_prompt,
                     )
-                    reply, error = client.complete(
-                        messages=messages,
-                        json_schema=json_schemas[cfg["model"]],
-                        creativity=effective_creativity,
-                        thinking_budget=thinking_budget if cfg["provider"] in ("google", "openai", "anthropic", "huggingface", "huggingface-together") else None,
-                        max_retries=max_retries,
-                    )
-                    if error:
-                        json_result = '{"1":"e"}'
-                    else:
-                        json_result = extract_json(reply)
-                        json_result = _try_formatter_fallback(json_result, reply)
 
-                        # Run Chain of Verification if enabled
-                        if chain_of_verification and not error:
-                            step2, step3, step4 = build_cove_prompts(
-                                cove_original_task, response_text
-                            )
-                            json_result = run_chain_of_verification(
-                                client=client,
-                                initial_reply=json_result,
-                                step2_prompt=step2,
-                                step3_prompt=step3,
-                                step4_prompt=step4,
-                                json_schema=json_schemas[cfg["model"]],
-                                creativity=effective_creativity,
-                                max_retries=max_retries,
-                            )
-                            json_result = _try_formatter_fallback(json_result, json_result)
+                    json_result = '{"1":"e"}'
+                    error = None
+                    _n_cats = len(categories)
+
+                    for _json_attempt in range(json_retries + 1):
+                        # On retries, nudge the model toward plain JSON output
+                        if _json_attempt > 0:
+                            _nudge = "\n\nRespond with ONLY valid JSON, no explanation or additional text."
+                            _last = messages[-1]
+                            _content = _last.get("content", "")
+                            _retry_messages = messages[:-1] + [{**_last, "content": _content + _nudge}]
+                        else:
+                            _retry_messages = messages
+
+                        reply, error = client.complete(
+                            messages=_retry_messages,
+                            json_schema=json_schemas[cfg["model"]],
+                            creativity=effective_creativity,
+                            thinking_budget=thinking_budget if cfg["provider"] in ("google", "openai", "anthropic", "huggingface", "huggingface-together") else None,
+                            max_retries=max_retries,
+                        )
+
+                        if error:
+                            json_result = '{"1":"e"}'
+                            break  # API-level failure already retried by max_retries
+
+                        json_result = extract_json(reply)
+                        _json_valid, _ = validate_classification_json(json_result, _n_cats)
+
+                        if _json_valid:
+                            break
+
+                        # Final attempt: invoke formatter before giving up
+                        if _json_attempt == json_retries:
+                            json_result = _try_formatter_fallback(json_result, reply)
+
+                    # Run Chain of Verification if enabled
+                    if chain_of_verification and not error:
+                        step2, step3, step4 = build_cove_prompts(
+                            cove_original_task, response_text
+                        )
+                        json_result = run_chain_of_verification(
+                            client=client,
+                            initial_reply=json_result,
+                            step2_prompt=step2,
+                            step3_prompt=step3,
+                            step4_prompt=step4,
+                            json_schema=json_schemas[cfg["model"]],
+                            creativity=effective_creativity,
+                            max_retries=max_retries,
+                        )
+                        json_result = _try_formatter_fallback(json_result, json_result)
 
             return (cfg["sanitized_name"], json_result, error)
 
@@ -3760,7 +3787,7 @@ def summarize_ensemble(
     context_prompt: bool = False,
     step_back_prompt: bool = False,
     max_retries: int = 5,
-    batch_retries: int = 2,
+    batch_retries: int = 1,
     retry_delay: float = 1.0,
     row_delay: float = 0.0,
     fail_strategy: str = "partial",
@@ -3806,7 +3833,7 @@ def summarize_ensemble(
         context_prompt: Add expert context prefix
         step_back_prompt: Enable step-back prompting
         max_retries: Max retries per API call
-        batch_retries: Number of batch retry passes for failed items
+        batch_retries: Number of batch retry passes for failed items (default 1)
         retry_delay: Delay between retries in seconds
         row_delay: Delay in seconds between processing each row (default 0.0)
         fail_strategy: How to handle failures - "partial" (default) or "strict"

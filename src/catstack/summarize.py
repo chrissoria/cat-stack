@@ -55,7 +55,7 @@ def summarize(
     # Robustness parameters
     safety: bool = False,
     max_retries: int = 5,
-    batch_retries: int = 2,
+    batch_retries: int = 1,
     retry_delay: float = 1.0,
     row_delay: float = 0.0,
     fail_strategy: str = "partial",
@@ -131,7 +131,7 @@ def summarize(
         auto_download (bool): Auto-download missing Ollama models. Default False.
         safety (bool): If True, saves progress after each item. Requires filename.
         max_retries (int): Max retries per API call. Default 5.
-        batch_retries (int): Max retries for batch-level failures. Default 2.
+        batch_retries (int): Max retries for batch-level failures. Default 1.
         retry_delay (float): Delay between retries in seconds. Default 1.0.
         row_delay (float): Delay in seconds between processing each row. Default 0.0.
         fail_strategy (str): How to handle failures - "partial" (default) or "strict".
