@@ -826,41 +826,21 @@ def image_score_drawing(
         image_files = image_input
         print(f"Provided a list of {len(image_input)} images.")
 
-    with open(reference_image, 'rb') as f:
-        reference = base64.b64encode(f.read()).decode('utf-8')
-        reference_image = f"data:image/{reference_image.split('.')[-1]};base64,{reference}"
+    ref_encoded, ref_ext, ref_valid = _encode_image(reference_image)
+    if not ref_valid:
+        raise FileNotFoundError(f"reference_image not readable: {reference_image}")
+    reference = ref_encoded
+    reference_image = f"data:image/{ref_ext};base64,{ref_encoded}"
 
     link1 = []
     extracted_jsons = []
 
     for i, img_path in enumerate(tqdm(image_files, desc="Categorising images"), start=0):
-    # Check validity first
-        if img_path is None or not os.path.exists(img_path):
+        encoded, ext, is_valid = _encode_image(img_path)
+        if not is_valid:
             link1.append("Skipped NaN input or invalid path")
             extracted_jsons.append("""{"no_valid_image": 1}""")
-            continue  # Skip the rest of the loop iteration
-
-    # Only open the file if path is valid
-        if os.path.isdir(img_path):
-            encoded = "Not a Valid Image, contains file path"
-        else:
-            try:
-                with open(img_path, "rb") as f:
-                    encoded = base64.b64encode(f.read()).decode("utf-8")
-            except Exception as e:
-                    encoded = f"Error: {str(e)}"
-    # Handle extension safely
-        if encoded.startswith("Error:") or encoded == "Not a Valid Image, contains file path":
-            encoded_image = encoded
-            valid_image = False
-
-        else:
-            ext = Path(img_path).suffix.lstrip(".").lower()
-            encoded_image = f"data:image/{ext};base64,{encoded}"
-            valid_image = True
-
-    # Handle extension safely
-        ext = Path(img_path).suffix.lstrip(".").lower()
+            continue
         encoded_image = f"data:image/{ext};base64,{encoded}"
 
         if model_source == "openai" or model_source == "mistral":
@@ -1036,12 +1016,6 @@ def image_score_drawing(
             except Exception as e:
                 print(f"An error occurred: {e}")
                 link1.append(f"Error processing input: {e}")
-        #if no valid image path is provided
-        elif  valid_image == False:
-            reply = "invalid image path"
-            print("Skipped NaN input or invalid path")
-            #extracted_jsons.append("""{"no_valid_path": 1}""")
-            link1.append("Error processing input: {e}")
         else:
             raise ValueError("Unknown source! Choose from OpenAI, Perplexity, or Mistral")
             # in situation that no JSON is found
@@ -1165,30 +1139,12 @@ def image_features(
     extracted_jsons = []
 
     for i, img_path in enumerate(tqdm(image_files, desc="Scoring images"), start=0):
-    # Check validity first
-        if img_path is None or not os.path.exists(img_path):
+        encoded, ext, is_valid = _encode_image(img_path)
+        if not is_valid:
             link1.append("Skipped NaN input or invalid path")
             extracted_jsons.append("""{"no_valid_image": 1}""")
-            continue  # Skip the rest of the loop iteration
-
-    # Only open the file if path is valid
-        if os.path.isdir(img_path):
-            encoded = "Not a Valid Image, contains file path"
-        else:
-            try:
-                with open(img_path, "rb") as f:
-                    encoded = base64.b64encode(f.read()).decode("utf-8")
-            except Exception as e:
-                    encoded = f"Error: {str(e)}"
-    # Handle extension safely
-        if encoded.startswith("Error:") or encoded == "Not a Valid Image, contains file path":
-            encoded_image = encoded
-            valid_image = False
-
-        else:
-            ext = Path(img_path).suffix.lstrip(".").lower()
-            encoded_image = f"data:image/{ext};base64,{encoded}"
-            valid_image = True
+            continue
+        encoded_image = f"data:image/{ext};base64,{encoded}"
 
         if model_source == "openai" or model_source == "mistral":
             prompt = [
@@ -1376,10 +1332,6 @@ def image_features(
                 print(f"An error occurred: {e}")
                 link1.append(f"Error processing input: {e}")
 
-        elif  valid_image == False:
-            print("Skipped NaN input or invalid path")
-            reply = None
-            link1.append(f"Error processing input: invalid image")
         else:
             raise ValueError("Unknown source! Choose from OpenAI, Anthropic, Perplexity, or Mistral")
             # in situation that no JSON is found

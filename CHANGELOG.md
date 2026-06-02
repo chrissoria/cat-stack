@@ -48,6 +48,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conversion branch so both flags travel together.
 
 ### Changed
+- **`image_score_drawing` and `image_features` now route base64 encoding
+  through the shared `_encode_image` helper.** Previously, both functions
+  reinvented inline base64 encoding without the helper's `jpg`→`jpeg`
+  normalization, lowercase-extension handling, or extensionless-path
+  guard. `image_score_drawing` additionally had an unconditional
+  duplicate data-URI wrap that rewrapped error strings like
+  `"Error: [Errno 2] No such file or directory: 'x.png'"` into fake
+  `data:image/...;base64,Error:…` URIs and shipped them to the provider.
+  Both functions now use `_encode_image` (returning
+  `(encoded, ext, is_valid)`), skip invalid inputs via `continue` with
+  the `{"no_valid_image": 1}` sentinel, and write the data URI from the
+  normalized extension exactly once. The reference image in
+  `image_score_drawing` now raises `FileNotFoundError` eagerly when the
+  path can't be read, instead of silently producing a broken URI.
 - **`UnifiedLLMClient.__init__` no longer probes HuggingFace endpoints
   eagerly.** Previously, *every* HuggingFace client construction issued
   two probe POSTs (with the user's API key) to `router.huggingface.co/v1`
