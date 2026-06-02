@@ -7,31 +7,56 @@ def pdf_chain_of_verification_openai(
     step2_prompt,
     step3_prompt,
     step4_prompt,
-    client,
+    client,  # Deprecated, kept for backward compatibility
     user_model,
     creativity,
     remove_numbering,
-    pdf_content
+    pdf_content,
+    api_key=None,
+    base_url=None,
 ):
     """
-    Execute Chain of Verification (CoVe) process for PDF pages with OpenAI.
-    The PDF page (as image) is included in verification steps for accurate assessment.
-    Returns the verified reply or initial reply if error occurs.
+    Execute Chain of Verification (CoVe) process for PDF pages with OpenAI-compatible
+    providers. The PDF page (as image) is included in verification steps for accurate
+    assessment. Returns the verified reply or the initial reply if any error occurs.
+
+    Uses direct HTTP requests instead of the OpenAI SDK so the function works for
+    any OpenAI-compatible provider (OpenAI, Perplexity, HuggingFace, xAI, ...) given
+    the right `base_url`.
 
     Args:
-        pdf_content: The PDF page content in OpenAI format (as image_url dict after conversion)
+        pdf_content: The PDF page content in OpenAI format (image_url dict).
+        api_key: Bearer token for the provider.
+        base_url: Provider root URL (e.g. https://api.openai.com/v1). Defaults to OpenAI.
     """
+    import requests
+
+    if api_key is None:
+        return initial_reply
+
+    endpoint = (base_url or "https://api.openai.com/v1").rstrip("/") + "/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+
+    def make_openai_request(messages, json_mode=False):
+        payload = {"model": user_model, "messages": messages}
+        if creativity is not None:
+            payload["temperature"] = creativity
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=120)
+        response.raise_for_status()
+        result = response.json()
+        return result["choices"][0]["message"]["content"]
+
     try:
-        # STEP 2: Generate verification questions (text only - questions about the categorization)
+        # STEP 2: Generate verification questions (text only)
         step2_filled = step2_prompt.replace('<<INITIAL_REPLY>>', initial_reply)
-
-        verification_response = client.chat.completions.create(
-            model=user_model,
-            messages=[{'role': 'user', 'content': step2_filled}],
-            **({"temperature": creativity} if creativity is not None else {})
+        verification_questions = make_openai_request(
+            [{'role': 'user', 'content': step2_filled}]
         )
-
-        verification_questions = verification_response.choices[0].message.content
 
         # STEP 3: Answer verification questions WITH the PDF page
         questions_list = [
@@ -40,50 +65,33 @@ def pdf_chain_of_verification_openai(
             if q.strip()
         ]
         verification_qa = []
-
         for question in questions_list:
             step3_filled = step3_prompt.replace('<<QUESTION>>', question)
-
-            # Include PDF page in the verification question
             message_content = [
                 {"type": "text", "text": step3_filled},
-                pdf_content
+                pdf_content,
             ]
-
-            answer_response = client.chat.completions.create(
-                model=user_model,
-                messages=[{'role': 'user', 'content': message_content}],
-                **({"temperature": creativity} if creativity is not None else {})
+            answer = make_openai_request(
+                [{'role': 'user', 'content': message_content}]
             )
-
-            answer = answer_response.choices[0].message.content
             verification_qa.append(f"Q: {question}\nA: {answer}")
 
         # STEP 4: Final corrected categorization WITH the PDF page
         verification_qa_text = "\n\n".join(verification_qa)
-
         step4_filled = (step4_prompt
             .replace('<<INITIAL_REPLY>>', initial_reply)
             .replace('<<VERIFICATION_QA>>', verification_qa_text))
-
-        # Include PDF page in final categorization
         final_message_content = [
             {"type": "text", "text": step4_filled},
-            pdf_content
+            pdf_content,
         ]
-
-        final_response = client.chat.completions.create(
-            model=user_model,
-            messages=[{'role': 'user', 'content': final_message_content}],
-            response_format={"type": "json_object"},
-            **({"temperature": creativity} if creativity is not None else {})
+        verified_reply = make_openai_request(
+            [{'role': 'user', 'content': final_message_content}],
+            json_mode=True,
         )
-
-        verified_reply = final_response.choices[0].message.content
-
         return verified_reply
 
-    except Exception as e:
+    except Exception:
         return initial_reply
 
 
@@ -306,31 +314,52 @@ def pdf_chain_of_verification_mistral(
     step2_prompt,
     step3_prompt,
     step4_prompt,
-    client,
+    client,  # Deprecated, kept for backward compatibility
     user_model,
     creativity,
     remove_numbering,
-    pdf_content
+    pdf_content,
+    api_key=None,
 ):
     """
     Execute Chain of Verification (CoVe) process for PDF pages with Mistral AI.
-    The PDF page (as image) is included in verification steps for accurate assessment.
-    Returns the verified reply or initial reply if error occurs.
+    The PDF page (as image) is included in verification steps for accurate
+    assessment. Returns the verified reply or the initial reply if any error occurs.
+
+    Uses direct HTTP requests instead of the mistralai SDK.
 
     Args:
-        pdf_content: The PDF page content in Mistral format (dict with image_url after conversion)
+        pdf_content: The PDF page content in Mistral format (image_url dict).
+        api_key: Mistral API key.
     """
+    import requests
+
+    if api_key is None:
+        return initial_reply
+
+    endpoint = "https://api.mistral.ai/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+
+    def make_mistral_request(messages, json_mode=False):
+        payload = {"model": user_model, "messages": messages}
+        if creativity is not None:
+            payload["temperature"] = creativity
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=120)
+        response.raise_for_status()
+        result = response.json()
+        return result["choices"][0]["message"]["content"]
+
     try:
         # STEP 2: Generate verification questions (text only)
         step2_filled = step2_prompt.replace('<<INITIAL_REPLY>>', initial_reply)
-
-        verification_response = client.chat.complete(
-            model=user_model,
-            messages=[{'role': 'user', 'content': step2_filled}],
-            **({"temperature": creativity} if creativity is not None else {})
+        verification_questions = make_mistral_request(
+            [{'role': 'user', 'content': step2_filled}]
         )
-
-        verification_questions = verification_response.choices[0].message.content
 
         # STEP 3: Answer verification questions WITH the PDF page
         questions_list = [
@@ -339,48 +368,31 @@ def pdf_chain_of_verification_mistral(
             if q.strip()
         ]
         verification_qa = []
-
         for question in questions_list:
             step3_filled = step3_prompt.replace('<<QUESTION>>', question)
-
-            # Include PDF page in the verification question
             message_content = [
                 {"type": "text", "text": step3_filled},
-                pdf_content
+                pdf_content,
             ]
-
-            answer_response = client.chat.complete(
-                model=user_model,
-                messages=[{'role': 'user', 'content': message_content}],
-                **({"temperature": creativity} if creativity is not None else {})
+            answer = make_mistral_request(
+                [{'role': 'user', 'content': message_content}]
             )
-
-            answer = answer_response.choices[0].message.content
             verification_qa.append(f"Q: {question}\nA: {answer}")
 
         # STEP 4: Final corrected categorization WITH the PDF page
         verification_qa_text = "\n\n".join(verification_qa)
-
         step4_filled = (step4_prompt
             .replace('<<INITIAL_REPLY>>', initial_reply)
             .replace('<<VERIFICATION_QA>>', verification_qa_text))
-
-        # Include PDF page in final categorization
         final_message_content = [
             {"type": "text", "text": step4_filled},
-            pdf_content
+            pdf_content,
         ]
-
-        final_response = client.chat.complete(
-            model=user_model,
-            messages=[{'role': 'user', 'content': final_message_content}],
-            response_format={"type": "json_object"},
-            **({"temperature": creativity} if creativity is not None else {})
+        verified_reply = make_mistral_request(
+            [{'role': 'user', 'content': final_message_content}],
+            json_mode=True,
         )
-
-        verified_reply = final_response.choices[0].message.content
-
         return verified_reply
 
-    except Exception as e:
+    except Exception:
         return initial_reply

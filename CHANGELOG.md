@@ -48,6 +48,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conversion branch so both flags travel together.
 
 ### Changed
+- **`pdf_multi_class(chain_of_verification=True, ...)` no longer crashes
+  with `TypeError` on OpenAI / Mistral / Perplexity / HuggingFace / xAI.**
+  The migration from SDK clients to direct HTTP in `calls/pdf_CoVe.py`
+  was completed for the `anthropic` and `google` variants but abandoned
+  half-finished for `_openai` and `_mistral`: their signatures didn't
+  accept the `api_key` (and `base_url` for openai) kwargs that
+  `pdf_functions.py` passes, and their bodies still called
+  `client.chat.completions.create()` on a `client=None`. Finished the
+  migration to match the anthropic precedent — both functions now
+  accept `api_key` (+ `base_url` for openai), use `requests.post(...)`
+  via an internal helper, preserve the Step-4 `response_format=
+  {"type": "json_object"}` for JSON-mode output, and fall back to
+  returning the initial reply on any error. The deprecated `client`
+  parameter is kept on both signatures for backward compatibility with
+  existing callers that pass `client=None`.
 - **`image_score_drawing` and `image_features` no longer crash with
   `UnboundLocalError` on the first iteration when a provider call fails
   pre-success.** Each per-image loop now initializes `reply = None` at
