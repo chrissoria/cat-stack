@@ -906,18 +906,18 @@ def image_score_drawing(
                     )
                 },
                 {
-                    "type": "image",  # Added missing type
+                    "type": "image",
                     "source": {
                         "type": "base64",
-                        "media_type": "image/png",
+                        "media_type": f"image/{ref_ext}" if ref_ext else "image/jpeg",
                         "data": reference
                     }
                 },
                 {
-                    "type": "image",  # Added missing type
+                    "type": "image",
                     "source": {
                         "type": "base64",
-                        "media_type": "image/jpeg",
+                        "media_type": f"image/{ext}" if ext else "image/jpeg",
                         "data": encoded
                     }
                 }
@@ -1205,7 +1205,7 @@ def image_features(
                     "type": "image",
                     "source": {
                         "type": "base64",
-                        "media_type": "image/jpeg",
+                        "media_type": f"image/{ext}" if ext else "image/jpeg",
                         "data": encoded
                     }
                 }

@@ -48,6 +48,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conversion branch so both flags travel together.
 
 ### Changed
+- **Anthropic image dispatch now derives `media_type` from the file
+  extension instead of hardcoding `image/png` / `image/jpeg`.** Anthropic
+  validates the declared `media_type` against the actual image bytes
+  and returns HTTP 400 `invalid_request_error` ("The image was specified
+  using the image/jpeg media type, but the image appears to be a
+  image/png image") on mismatch. The three affected sites
+  (`image_score_drawing` reference + user image, `image_features` user
+  image) now use the same `f"image/{ext}" if ext else "image/jpeg"`
+  pattern as the newer `image_multi_class` paths, with `ext` coming from
+  `_encode_image`'s normalized return (`jpg` → `jpeg`, lowercase).
 - **`image_score_drawing` and `image_features` now route base64 encoding
   through the shared `_encode_image` helper.** Previously, both functions
   reinvented inline base64 encoding without the helper's `jpg`→`jpeg`
