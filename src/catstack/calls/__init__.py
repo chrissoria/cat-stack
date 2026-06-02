@@ -2,15 +2,17 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from .all_calls import (
+from .stepback import (
     get_stepback_insight_openai,
     get_stepback_insight_anthropic,
     get_stepback_insight_google,
     get_stepback_insight_mistral,
+)
+from .CoVe import (
     chain_of_verification_openai,
-    chain_of_verification_google,
     chain_of_verification_anthropic,
-    chain_of_verification_mistral
+    chain_of_verification_google,
+    chain_of_verification_mistral,
 )
 
 __all__ = [

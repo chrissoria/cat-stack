@@ -123,6 +123,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`regex` runtime dependency.** No longer needed after the JSON extraction
   refactor; all six former call sites now use stdlib via
   `_extract_balanced_json`.
+- **`catstack/calls/all_calls.py`** (621 lines). The module duplicated every
+  function already living in the per-strategy leaves (`stepback.py`,
+  `CoVe.py`, `top_n.py`) and shipped two runtime-broken CoVe variants —
+  `chain_of_verification_anthropic` (undefined `properties`, missing
+  `import json`) and `chain_of_verification_google` (undefined
+  `thinking_budget`). Nothing in `src/` and no sibling package imported
+  it. `calls/__init__.py` now re-exports the same eight public names
+  (`get_stepback_insight_*`, `chain_of_verification_*`) from the working
+  leaf modules — same signatures, same `__all__`, so any external caller
+  doing `from catstack.calls import chain_of_verification_anthropic`
+  silently gets the working version instead of the broken duplicate.
 
 ### Added
 - `tests/test_classify_auto_categories.py`, `tests/test_stepback_insights.py`,
