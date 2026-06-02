@@ -836,6 +836,7 @@ def image_score_drawing(
     extracted_jsons = []
 
     for i, img_path in enumerate(tqdm(image_files, desc="Categorising images"), start=0):
+        reply = None
         encoded, ext, is_valid = _encode_image(img_path)
         if not is_valid:
             link1.append("Skipped NaN input or invalid path")
@@ -1139,6 +1140,7 @@ def image_features(
     extracted_jsons = []
 
     for i, img_path in enumerate(tqdm(image_files, desc="Scoring images"), start=0):
+        reply = None
         encoded, ext, is_valid = _encode_image(img_path)
         if not is_valid:
             link1.append("Skipped NaN input or invalid path")

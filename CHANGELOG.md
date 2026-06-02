@@ -48,6 +48,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conversion branch so both flags travel together.
 
 ### Changed
+- **`image_score_drawing` and `image_features` no longer crash with
+  `UnboundLocalError` on the first iteration when a provider call fails
+  pre-success.** Each per-image loop now initializes `reply = None` at
+  the top of the iteration. The pre-fix code only assigned `reply` on
+  the success path of each provider's `try` block; any non-success
+  branch (401, 403, generic network error, Anthropic's empty-content
+  response, …) left `reply` unbound, and the post-dispatch
+  `if reply is not None:` check then raised `UnboundLocalError`,
+  crashing the entire call. Worse for multi-image batches: on a
+  later-iteration failure, `reply` still held the *previous* successful
+  iteration's response, silently attaching the wrong JSON to the
+  failing row. Verified live: a bad API key now produces a row whose
+  `model_response` contains the captured 401 and `json` is the
+  `{"1":"e"}` sentinel, instead of crashing the call.
 - **Anthropic image dispatch now derives `media_type` from the file
   extension instead of hardcoding `image/png` / `image/jpeg`.** Anthropic
   validates the declared `media_type` against the actual image bytes
