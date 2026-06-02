@@ -48,6 +48,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conversion branch so both flags travel together.
 
 ### Changed
+- **`catstack.fetch_url_text` is now SSRF-safe and no longer papers over
+  TLS errors.** Four hardening changes in `_web_fetch.py`, all
+  stdlib-only:
+  - **SSRF guard.** The URL's hostname is resolved via
+    `socket.getaddrinfo` before any HTTP request and rejected if any
+    returned address is private, loopback, link-local, reserved,
+    multicast, or unspecified. Catches AWS metadata
+    (`169.254.169.254`), `localhost`, RFC1918, IPv6 loopback (`::1`),
+    and the GCP metadata host pre-network. Does not defend against DNS
+    rebinding — out of scope for a stdlib guard.
+  - **Scheme allowlist.** `urllib.parse.urlsplit`-based parsing
+    replaces the unanchored `re.match` regex; only `http` and `https`
+    schemes are accepted. `file://`, `data:`, `javascript:`, `ftp://`
+    are all rejected.
+  - **No silent TLS bypass.** The `except SSLError: retry with
+    verify=False` fallback is gone. TLS errors surface to the caller
+    as ordinary fetch errors so MITM-detectable conditions stay
+    visible.
+  - **Streaming + byte cap.** Responses are read via
+    `iter_content(chunk_size=8192)` and capped at
+    `5 × _MAX_CONTENT_CHARS` bytes (~250 KB). Replaces the
+    full-buffer-then-truncate pattern that would OOM on a multi-GB
+    URL. `is_url` itself also rejects strings with embedded
+    `\\r`/`\\n`/`\\x00`, closing a CRLF-injection sliver.
 - **`pdf_multi_class(chain_of_verification=True, ...)` no longer crashes
   with `TypeError` on OpenAI / Mistral / Perplexity / HuggingFace / xAI.**
   The migration from SDK clients to direct HTTP in `calls/pdf_CoVe.py`
