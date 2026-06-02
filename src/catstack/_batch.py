@@ -818,13 +818,16 @@ def _run_one_sync_model(
             multi_label=prompt_params.get("multi_label", True),
         )
         try:
-            raw = client.complete(
+            raw, err = client.complete(
                 messages=messages,
                 json_schema=json_schema,
                 creativity=creativity,
                 thinking_budget=thinking_budget if thinking_budget and thinking_budget > 0 else None,
             )
-            item_results[idx] = (extract_json(raw), None)
+            if err:
+                item_results[idx] = (None, err)
+            else:
+                item_results[idx] = (extract_json(raw), None)
         except Exception as e:
             item_results[idx] = (None, str(e))
 

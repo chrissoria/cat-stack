@@ -30,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   helper. The helper is string-aware: inputs like
   `{"summary": "see Fig {3}"}` are now preserved correctly (the `regex`
   pattern silently truncated at the first `}` inside a string value).
+- **Batch ensembles with HuggingFace / Perplexity / Ollama no longer silently
+  produce schema errors from those models' columns.** The sync-fallback path
+  (`_run_one_sync_model` in `_batch.py`) was treating `client.complete()` as
+  returning a single value, but it returns a `(text, error)` tuple. The
+  result: `extract_json` was being called on the tuple and always returned
+  the error sentinel `{"1":"e"}` — for both successful and failing API
+  calls. Fixed the unpacking and added an explicit error branch matching
+  the parallel summarize sync-fallback at line 1187.
 
 ### Removed
 - **`regex` runtime dependency.** No longer needed after the JSON extraction
