@@ -7,6 +7,7 @@ without requiring provider-specific SDKs.
 """
 
 import json
+import threading
 import time
 import requests
 
@@ -68,54 +69,76 @@ _HF_ROUTER_ENDPOINTS = {
 }
 
 
-def _detect_huggingface_endpoint(api_key: str, model: str) -> str:
+def _detect_huggingface_endpoint(api_key: str, model: str, skip: set = None) -> str:
     """
-    Test which HuggingFace endpoint works for this model.
+    Probe HuggingFace endpoints to find one that supports this model.
 
-    If the model name has a router suffix (e.g., ":novita"), route directly
-    to that provider's endpoint. Otherwise tries generic router, then Together.
+    Two call modes:
+      - Legacy (skip=None): probe generic + Together only. Falls back to
+        returning the generic base URL when nothing responds 200 — keeps
+        existing `image_functions` / `pdf_functions` callers behaving as
+        before so they can surface their own error from the eventual request.
+      - Lazy-fallback (skip=non-empty set): probe generic + all five known
+        router endpoints, skipping any in `skip`. Returns None when no
+        candidate responds 200 — caller (e.g., UnifiedLLMClient.complete)
+        should then surface the original error.
 
     Args:
-        api_key: HuggingFace API key
-        model: Model name to test (may include :router suffix)
+        api_key: HuggingFace API key.
+        model: Model name to test (may include `:router` suffix).
+        skip: optional set of base URLs to skip (typically the URL that
+            just failed at the call site).
 
     Returns:
-        Base URL for the working endpoint (without /chat/completions)
+        Base URL (without /chat/completions) of a working endpoint, or
+        None when skip is non-empty and nothing worked.
     """
+    skip = skip or set()
     clean_model, router = _parse_hf_model_suffix(model)
 
-    # If explicit router suffix, use that endpoint directly
+    # If explicit router suffix and the suffix endpoint is not skipped,
+    # route directly without probing.
     if router and router in _HF_ROUTER_ENDPOINTS:
-        return _HF_ROUTER_ENDPOINTS[router]
+        candidate = _HF_ROUTER_ENDPOINTS[router]
+        if candidate not in skip:
+            return candidate
 
-    # Otherwise auto-detect
-    endpoints = [
-        "https://router.huggingface.co/v1/chat/completions",
-        "https://router.huggingface.co/together/v1/chat/completions",
-    ]
+    generic_base = PROVIDER_CONFIG["huggingface"]["endpoint"].replace("/chat/completions", "")
+
+    if skip:
+        # Lazy-fallback mode: probe all known routers in priority order.
+        candidates_base = [generic_base] + list(_HF_ROUTER_ENDPOINTS.values())
+    else:
+        # Legacy mode: only generic + Together (preserves prior behavior
+        # and probe count for non-UnifiedLLMClient callers).
+        candidates_base = [generic_base, _HF_ROUTER_ENDPOINTS["together"]]
 
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}"
+        "Authorization": f"Bearer {api_key}",
     }
-
     payload = {
         "model": clean_model,
         "messages": [{"role": "user", "content": "hi"}],
-        "max_tokens": 5
+        "max_tokens": 5,
     }
 
-    for endpoint in endpoints:
+    for base in candidates_base:
+        if base in skip:
+            continue
         try:
-            response = requests.post(endpoint, headers=headers, json=payload, timeout=30)
+            response = requests.post(f"{base}/chat/completions", headers=headers, json=payload, timeout=30)
             if response.status_code == 200:
-                # Return the base URL (without /chat/completions)
-                return endpoint.replace("/chat/completions", "")
+                return base
         except Exception:
             continue
 
-    # Default to generic (will fail with informative error)
-    return "https://router.huggingface.co/v1"
+    # Legacy callers expect a base URL even on failure (their HTTP call
+    # surfaces the real error). Lazy-fallback callers prefer None so they
+    # can surface the original error rather than retrying a known-bad URL.
+    if skip:
+        return None
+    return generic_base
 
 
 # =============================================================================
@@ -186,20 +209,78 @@ class UnifiedLLMClient:
     def __init__(self, provider: str, api_key: str, model: str):
         self.provider = provider.lower()
         self.api_key = api_key
-
-        # Keep full model name with router suffix — the generic HF router
-        # uses the suffix (e.g. :novita, :together) for routing.
         self.model = model
 
-        # Auto-detect HuggingFace endpoint (but always use generic router)
+        # Lazy HuggingFace router fallback — start with None and only
+        # populate when we either (a) have an explicit router suffix, or
+        # (b) the default endpoint returns a "wrong router" 400 on a real
+        # request. Avoids burning two probe POSTs (and leaking the API key
+        # to two endpoints) on every UnifiedLLMClient construction.
+        self._custom_endpoint = None
+        self._endpoint_lock = threading.Lock()
+
         if self.provider == "huggingface":
-            _detect_huggingface_endpoint(api_key, model)
+            clean_model, router = _parse_hf_model_suffix(model)
+            if router and router in _HF_ROUTER_ENDPOINTS:
+                # User was explicit about the router; honour it directly and
+                # strip the suffix from the model name (specific-router
+                # endpoints expect the clean name, not the suffix).
+                self._custom_endpoint = f"{_HF_ROUTER_ENDPOINTS[router]}/chat/completions"
+                self.model = clean_model
 
         if self.provider not in PROVIDER_CONFIG:
             raise ValueError(f"Unsupported provider: {provider}. "
                            f"Supported: {list(PROVIDER_CONFIG.keys())}")
 
         self.config = PROVIDER_CONFIG[self.provider]
+
+    def _is_hf_wrong_router_400(self, body: str) -> bool:
+        """True if a 400 response body indicates the current HF router doesn't
+        carry this model (vs. truly nonexistent or a non-routing problem).
+
+        Trigger shapes (from a smoke test against the live HF API):
+          - Generic router: `{"error":{"code":"model_not_supported",...}}`
+          - Specific router: `{"error":"Model not supported by provider XYZ"}`
+
+        Intentionally NOT triggered by `model_not_found` (no router will help
+        a nonexistent model), 401/403 (auth), 5xx/429 (transient), or any
+        other 400 unrelated to router routing.
+        """
+        if self.provider != "huggingface":
+            return False
+        return (
+            '"code":"model_not_supported"' in body
+            or "Model not supported by provider" in body
+        )
+
+    def _try_hf_router_fallback(self, failed_endpoint: str) -> bool:
+        """Find an HF router that has this model. Cache it on self.
+
+        Called from `complete()` when an HF request returns a "wrong router"
+        400. Probes all five known specific routers plus the generic router,
+        skipping the one that just failed. Idempotent and thread-safe via
+        the per-instance endpoint lock — if two concurrent callers both hit
+        the fallback path, only one runs the probe.
+
+        Returns True if a working endpoint was found and cached (caller
+        should refresh and retry). Returns False if every alternative also
+        rejected the model (caller should surface the original error).
+        """
+        failed_base = failed_endpoint.replace("/chat/completions", "")
+        with self._endpoint_lock:
+            # Did another thread already find a different working endpoint?
+            if self._custom_endpoint:
+                current_base = self._custom_endpoint.replace("/chat/completions", "")
+                if current_base != failed_base:
+                    return True
+
+            new_base = _detect_huggingface_endpoint(
+                self.api_key, self.model, skip={failed_base}
+            )
+            if new_base:
+                self._custom_endpoint = f"{new_base}/chat/completions"
+                return True
+            return False
 
     def _get_endpoint(self) -> str:
         """Get the API endpoint, substituting model if needed."""
@@ -555,11 +636,11 @@ class UnifiedLLMClient:
         if self.provider == "claude-code":
             return self._call_claude_cli(messages, max_retries=max_retries, initial_delay=initial_delay)
 
-        endpoint = self._get_endpoint()
         headers = self._get_headers()
         payload = self._build_payload(messages, json_schema, creativity, thinking_budget=thinking_budget, force_json=force_json)
 
         for attempt in range(max_retries):
+            endpoint = self._get_endpoint()
             try:
                 response = requests.post(
                     endpoint,
@@ -582,6 +663,12 @@ class UnifiedLLMClient:
                                 self._warned_no_structured = True
                             payload.pop("response_format")
                             continue  # Retry immediately without response_format
+
+                    # HuggingFace: try other routers when the current one
+                    # rejects the model with a "wrong router" 400.
+                    if self._is_hf_wrong_router_400(response.text):
+                        if self._try_hf_router_fallback(endpoint):
+                            continue  # retry with the newly-cached endpoint
                 if response.status_code == 404 or (response.status_code == 400 and "not found" in response.text.lower() and "model" in response.text.lower()):
                     return None, f"Model '{self.model}' not found for {self.provider}"
                 elif response.status_code in [401, 403]:

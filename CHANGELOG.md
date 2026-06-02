@@ -47,6 +47,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the function and added `is_image_mode = False` to the DOCX-to-text
   conversion branch so both flags travel together.
 
+### Changed
+- **`UnifiedLLMClient.__init__` no longer probes HuggingFace endpoints
+  eagerly.** Previously, *every* HuggingFace client construction issued
+  two probe POSTs (with the user's API key) to `router.huggingface.co/v1`
+  and `…/together/v1` to "detect" the right endpoint — and then discarded
+  the result, so the detection was a no-op. Replaced with lazy
+  resolution: explicit `:router` suffixes (`:novita`, `:together`,
+  `:sambanova`, `:cerebras`, `:fireworks`) are honoured immediately
+  without probing; for un-suffixed models, the client uses the configured
+  generic endpoint and only falls back to probing alternative routers on
+  the actual 400 "Model not supported by provider …" response. The
+  fallback probes all five known specific routers plus the generic one,
+  caches the first working endpoint on the instance, and retries —
+  subsequent calls reuse the cached endpoint with no further probes.
+  Thread-safe via a per-instance `threading.Lock`. The probe API now
+  takes an optional `skip` set so callers can exclude endpoints that
+  already failed; legacy callers (in `image_functions` / `pdf_functions`)
+  preserve their two-endpoint probe behavior when `skip` is omitted.
+
 ### Removed
 - **`regex` runtime dependency.** No longer needed after the JSON extraction
   refactor; all six former call sites now use stdlib via
