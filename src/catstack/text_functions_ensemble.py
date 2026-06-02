@@ -3912,6 +3912,7 @@ def summarize_ensemble(
 
     needs_ocr = (resolved_mode == "text" and file_type in ("image", "pdf"))
     is_pdf_mode = (file_type == 'pdf')
+    is_image_mode = (file_type == 'image')
 
     # DOCX pre-processing
     if file_type == 'docx':
@@ -3919,6 +3920,7 @@ def summarize_ensemble(
         input_data = _convert_docx_to_text(input_data)
         file_type = 'text'
         is_pdf_mode = False
+        is_image_mode = False
         needs_ocr = False
         print(f"Converted to {len(input_data) if hasattr(input_data, '__len__') else 1} text item(s)")
 
@@ -4218,7 +4220,6 @@ def summarize_ensemble(
             )
 
     # Process all items
-    is_image_mode = (file_type == 'image')
     if needs_ocr:
         progress_desc = "OCR + Summarizing" + (" images" if is_image_mode else " PDF pages")
     elif is_pdf_mode:

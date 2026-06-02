@@ -38,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the error sentinel `{"1":"e"}` — for both successful and failing API
   calls. Fixed the unpacking and added an explicit error branch matching
   the parallel summarize sync-fallback at line 1187.
+- **`summarize_ensemble` no longer relies on Python late binding to find
+  `is_image_mode`.** The flag was assigned ~300 lines after the
+  `summarize_single_item` closure that uses it. Production worked only
+  because the closure was invoked after the assignment, but a future
+  refactor moving the closure invocation earlier would have raised
+  `NameError`. Hoisted the assignment next to `is_pdf_mode` at the top of
+  the function and added `is_image_mode = False` to the DOCX-to-text
+  conversion branch so both flags travel together.
 
 ### Removed
 - **`regex` runtime dependency.** No longer needed after the JSON extraction
