@@ -5,6 +5,44 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`classify(categories="auto")` no longer raises `ModuleNotFoundError`.** The
+  lazy import inside `classify_ensemble` referenced a non-existent `.main`
+  submodule; corrected to `.extract`. Every prior call with
+  `categories="auto"` failed at import time.
+- **`summarize(step_back_prompt=True)` no longer raises `TypeError`.**
+  `gather_stepback_insights` was being called with `context=` / `question=`
+  kwargs it didn't accept. Refactored the helper to take a prepared
+  `stepback_prompt` string; `classify_ensemble` and `summarize_ensemble` now
+  build their own templates at the call site. Removes the survey-specific
+  vocabulary from the shared helper.
+- **Google PDF/image summaries no longer silently return empty strings.**
+  `_call_google_multimodal` was nested inside `classify_ensemble`'s closure
+  and unreachable from `summarize_ensemble` — the `NameError` was swallowed
+  by a bare `except Exception`, producing `{"summary": ""}` for every Google
+  multimodal summary. Promoted the helper to module level and fixed the
+  tuple unpacking at both summarize call sites.
+- **`_extract_json_for_summary` no longer raises `NameError` on a missing
+  `regex` import.** Replaced the `regex.findall(r'\{(?:[^{}]|(?R))*\}', ...)`
+  pattern across all 6 call sites with a stdlib `_extract_balanced_json`
+  helper. The helper is string-aware: inputs like
+  `{"summary": "see Fig {3}"}` are now preserved correctly (the `regex`
+  pattern silently truncated at the first `}` inside a string value).
+
+### Removed
+- **`regex` runtime dependency.** No longer needed after the JSON extraction
+  refactor; all six former call sites now use stdlib via
+  `_extract_balanced_json`.
+
+### Added
+- `tests/test_classify_auto_categories.py`, `tests/test_stepback_insights.py`,
+  `tests/test_summarize_google_multimodal.py`, `tests/test_extract_balanced_json.py`
+  — 28 new mocked tests covering each of the four fixes above. No network.
+
+---
+
 ## [1.4.1] - 2026-05-18
 
 ### Changed
