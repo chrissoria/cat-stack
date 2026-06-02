@@ -1,7 +1,7 @@
 import warnings
 
 from .text_functions import _detect_model_source
-from ._utils import _clean_label
+from ._utils import _clean_label, _extract_balanced_json
 from .calls.pdf_stepback import get_pdf_stepback_insight
 
 # Exported names (excludes deprecated pdf_multi_class)
@@ -292,7 +292,6 @@ def pdf_multi_class(
     import os
     import json
     import pandas as pd
-    import regex
     import time
     from tqdm import tqdm
 
@@ -1214,9 +1213,9 @@ Provide the final categorization in the same JSON format:"""
         if reply is None:
             return """{"1":"e"}"""
 
-        extracted_json = regex.findall(r'\{(?:[^{}]|(?R))*\}', reply, regex.DOTALL)
-        if extracted_json:
-            return extracted_json[0].replace('[', '').replace(']', '').replace('\n', '').replace(" ", '').replace("  ", '')
+        extracted_json = _extract_balanced_json(reply)
+        if extracted_json is not None:
+            return extracted_json.replace('[', '').replace(']', '').replace('\n', '').replace(" ", '').replace("  ", '')
         else:
             print("""{"1":"e"}""")
             return """{"1":"e"}"""

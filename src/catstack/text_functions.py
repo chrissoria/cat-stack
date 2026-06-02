@@ -34,7 +34,6 @@ __all__ = [
     "_detect_huggingface_endpoint",
 ]
 import pandas as pd
-import regex
 from tqdm import tqdm
 
 from .calls.stepback import (
@@ -72,7 +71,7 @@ from ._providers import (
     check_claude_cli_available,
     OLLAMA_MODEL_SIZES,
 )
-from ._utils import _clean_label
+from ._utils import _clean_label, _extract_balanced_json
 from ._prompts import get_prompt
 
 
@@ -144,9 +143,9 @@ def extract_json(reply: str) -> str:
     if reply is None:
         return '{"1":"e"}'
 
-    extracted = regex.findall(r'\{(?:[^{}]|(?R))*\}', reply, regex.DOTALL)
-    if extracted:
-        raw = extracted[0].replace('[', '').replace(']', '')
+    extracted = _extract_balanced_json(reply)
+    if extracted is not None:
+        raw = extracted.replace('[', '').replace(']', '')
         # Parse and re-serialize to normalize structural whitespace while
         # preserving spaces inside string values (e.g. summaries)
         try:

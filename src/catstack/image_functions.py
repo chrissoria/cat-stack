@@ -1,7 +1,7 @@
 import warnings
 
 from .text_functions import _detect_model_source
-from ._utils import _clean_label
+from ._utils import _clean_label, _extract_balanced_json
 from .calls.image_stepback import get_image_stepback_insight
 
 # Exported names (excludes deprecated image_multi_class)
@@ -116,7 +116,6 @@ def image_multi_class(
     import os
     import json
     import pandas as pd
-    import regex
     import time
     from tqdm import tqdm
 
@@ -681,9 +680,9 @@ Provide the final categorization in the same JSON format:"""
         if reply == "invalid image path":
             return """{"no_valid_path": 1}"""
 
-        extracted_json = regex.findall(r'\{(?:[^{}]|(?R))*\}', reply, regex.DOTALL)
-        if extracted_json:
-            return extracted_json[0].replace('[', '').replace(']', '').replace('\n', '').replace(" ", '').replace("  ", '')
+        extracted_json = _extract_balanced_json(reply)
+        if extracted_json is not None:
+            return extracted_json.replace('[', '').replace(']', '').replace('\n', '').replace(" ", '').replace("  ", '')
         else:
             print("""{"1":"e"}""")
             return """{"1":"e"}"""
@@ -796,7 +795,6 @@ def image_score_drawing(
     import os
     import json
     import pandas as pd
-    import regex
     from tqdm import tqdm
     import glob
     import base64
@@ -1051,9 +1049,9 @@ def image_score_drawing(
             if reply == "invalid image path":
                 extracted_jsons.append("""{"no_valid_path": 1}""")
             else:
-                extracted_json = regex.findall(r'\{(?:[^{}]|(?R))*\}', reply, regex.DOTALL)
-                if extracted_json:
-                    cleaned_json = extracted_json[0].replace('[', '').replace(']', '').replace('\n', '').replace(" ", '').replace("  ", '')
+                extracted_json = _extract_balanced_json(reply)
+                if extracted_json is not None:
+                    cleaned_json = extracted_json.replace('[', '').replace(']', '').replace('\n', '').replace(" ", '').replace("  ", '')
                     extracted_jsons.append(cleaned_json)
                 else:
                     error_message = """{"1":"e"}"""
@@ -1131,7 +1129,6 @@ def image_features(
     import os
     import json
     import pandas as pd
-    import regex
     from tqdm import tqdm
     import glob
     import base64
@@ -1387,9 +1384,9 @@ def image_features(
             raise ValueError("Unknown source! Choose from OpenAI, Anthropic, Perplexity, or Mistral")
             # in situation that no JSON is found
         if reply is not None:
-            extracted_json = regex.findall(r'\{(?:[^{}]|(?R))*\}', reply, regex.DOTALL)
-            if extracted_json:
-                cleaned_json = extracted_json[0].replace('[', '').replace(']', '').replace('\n', '').replace(" ", '').replace("  ", '')
+            extracted_json = _extract_balanced_json(reply)
+            if extracted_json is not None:
+                cleaned_json = extracted_json.replace('[', '').replace(']', '').replace('\n', '').replace(" ", '').replace("  ", '')
                 extracted_jsons.append(cleaned_json)
                 #print(cleaned_json)
             else:

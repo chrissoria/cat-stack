@@ -51,6 +51,7 @@ from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Callable, Union
 
+from ._utils import _extract_balanced_json
 from .text_functions import (
     UnifiedLLMClient,
     detect_provider,
@@ -932,29 +933,30 @@ def normalize_model_input(
 
 def gather_stepback_insights(
     model_configs: list,
-    survey_question: str,
+    stepback_prompt: str,
     creativity: float = None,
 ) -> dict:
     """
     Gather step-back insights from each model.
 
-    Step-back prompting first asks about underlying factors before classification.
+    Step-back prompting first asks about underlying factors before the main task.
 
     Args:
         model_configs: List of model configuration dicts
-        survey_question: The survey question being analyzed
+        stepback_prompt: The fully-formed question/prompt sent to each model
+            to elicit stepback insights. Callers build this string for their
+            use case (e.g., classify templates around the survey question;
+            summarize templates around the summarization goal).
         creativity: Temperature setting
 
     Returns:
-        Dict mapping model name to (stepback_question, insight) tuples
+        Dict mapping model name to (stepback_prompt, insight) tuples
     """
-    if not survey_question:
+    if not stepback_prompt:
         raise TypeError(
-            "survey_question is required when using step_back_prompt. "
-            "Please provide the survey question you are analyzing."
+            "stepback_prompt is required when using step_back_prompt. "
+            "Pass the prepared stepback question/prompt to send to the models."
         )
-
-    stepback_question = f'What are the underlying factors or dimensions that explain how people typically answer "{survey_question}"?'
 
     print("Getting step-back insights for each model...")
     stepback_insights = {}
@@ -964,13 +966,13 @@ def gather_stepback_insights(
             effective_creativity = cfg.get("creativity") if cfg.get("creativity") is not None else creativity
             insight, added = _get_stepback_insight(
                 cfg["provider"],
-                stepback_question,
+                stepback_prompt,
                 cfg["api_key"],
                 cfg["model"],
                 effective_creativity
             )
             if added:
-                stepback_insights[cfg["model"]] = (stepback_question, insight)
+                stepback_insights[cfg["model"]] = (stepback_prompt, insight)
 
     return stepback_insights
 
@@ -1406,11 +1408,11 @@ def _extract_json_for_summary(reply: str) -> str:
     import re as _re
     reply = _re.sub(r'<think>.*?</think>', '', reply, flags=_re.DOTALL).strip()
 
-    # Find JSON object using recursive regex (regex module imported at top of file)
+    # Find first balanced-brace JSON object (string-aware, stdlib only)
     try:
-        extracted = regex.findall(r'\{(?:[^{}]|(?R))*\}', reply, regex.DOTALL)
-        if extracted:
-            return extracted[0]
+        extracted = _extract_balanced_json(reply)
+        if extracted is not None:
+            return extracted
     except Exception:
         pass
 
@@ -2247,6 +2249,89 @@ def _save_partial_results(
     partial_df.to_csv(save_path, index=False)
 
 
+def _call_google_multimodal(client, messages, json_schema, creativity, thinking_budget, max_retries):
+    """Handle Google's multimodal API format for PDF/image content.
+
+    Module-level so summarize_ensemble can reach it too; otherwise it would
+    only be visible inside classify_ensemble's closure.
+    """
+    import requests
+
+    user_msg = messages[-1]
+    content = user_msg.get("content", [])
+
+    parts = []
+    for part in content:
+        if part.get("type") == "text":
+            parts.append({"text": part["text"]})
+        elif part.get("type") == "inline_data":
+            parts.append({
+                "inline_data": {
+                    "mime_type": part["mime_type"],
+                    "data": part["data"]
+                }
+            })
+        elif part.get("type") == "image_url":
+            url = part["image_url"]["url"]
+            if url.startswith("data:image/png;base64,"):
+                data = url.replace("data:image/png;base64,", "")
+                parts.append({
+                    "inline_data": {
+                        "mime_type": "image/png",
+                        "data": data
+                    }
+                })
+
+    model_name = client.model
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+    headers = {
+        "x-goog-api-key": client.api_key,
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "contents": [{"parts": parts}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            **({"temperature": creativity} if creativity is not None else {}),
+            **({"thinkingConfig": {"thinkingBudget": thinking_budget}} if thinking_budget else {})
+        }
+    }
+
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=120)
+            response.raise_for_status()
+            result = response.json()
+
+            if "candidates" in result and result["candidates"]:
+                reply = result["candidates"][0]["content"]["parts"][0]["text"]
+                return reply, None
+            else:
+                return None, "No response generated"
+
+        except requests.exceptions.HTTPError as e:
+            status_code = e.response.status_code
+            retryable_errors = [429, 500, 502, 503, 504]
+
+            if status_code in retryable_errors and attempt < max_retries - 1:
+                import time
+                wait_time = 10 * (2 ** attempt) if status_code == 429 else 2 * (2 ** attempt)
+                time.sleep(wait_time)
+            else:
+                return None, f"HTTP error {status_code}: {str(e)}"
+
+        except Exception as e:
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(2 * (2 ** attempt))
+            else:
+                return None, str(e)
+
+    return None, "Max retries exceeded"
+
+
 def classify_ensemble(
     input_data,
     categories,
@@ -2472,7 +2557,7 @@ def classify_ensemble(
 
     # Handle categories="auto" - auto-detect categories from the data
     if categories == "auto":
-        from .main import extract
+        from .extract import extract
 
         # Detect input type to choose the right extraction path
         detected_type = _detect_input_type(input_data)
@@ -2665,7 +2750,16 @@ def classify_ensemble(
     # Get step-back insights per model (if enabled)
     stepback_insights = {}
     if step_back_prompt:
-        stepback_insights = gather_stepback_insights(model_configs, survey_question, creativity)
+        if not survey_question:
+            raise TypeError(
+                "survey_question is required when using step_back_prompt. "
+                "Please provide the survey question you are analyzing."
+            )
+        stepback_prompt = (
+            f'What are the underlying factors or dimensions that explain '
+            f'how people typically answer "{survey_question}"?'
+        )
+        stepback_insights = gather_stepback_insights(model_configs, stepback_prompt, creativity)
 
     # Build JSON schemas per provider
     json_schemas = prepare_json_schemas(model_configs, categories, use_json_schema)
@@ -3070,91 +3164,6 @@ Categorize text responses {cove_categorize}:
 
         except Exception as e:
             return (cfg["sanitized_name"], '{"1":"e"}', str(e))
-
-    # Helper function for Google multimodal API calls
-    def _call_google_multimodal(client, messages, json_schema, creativity, thinking_budget, max_retries):
-        """
-        Handle Google's multimodal API format for PDF/image content.
-        """
-        import requests
-
-        # Extract the content from messages
-        user_msg = messages[-1]  # Last message should be the user message
-        content = user_msg.get("content", [])
-
-        # Build Google-format parts
-        parts = []
-        for part in content:
-            if part.get("type") == "text":
-                parts.append({"text": part["text"]})
-            elif part.get("type") == "inline_data":
-                parts.append({
-                    "inline_data": {
-                        "mime_type": part["mime_type"],
-                        "data": part["data"]
-                    }
-                })
-            elif part.get("type") == "image_url":
-                # Convert image URL to inline_data format
-                url = part["image_url"]["url"]
-                if url.startswith("data:image/png;base64,"):
-                    data = url.replace("data:image/png;base64,", "")
-                    parts.append({
-                        "inline_data": {
-                            "mime_type": "image/png",
-                            "data": data
-                        }
-                    })
-
-        # Get model name from client
-        model_name = client.model
-
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
-        headers = {
-            "x-goog-api-key": client.api_key,
-            "Content-Type": "application/json"
-        }
-
-        payload = {
-            "contents": [{"parts": parts}],
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                **({"temperature": creativity} if creativity is not None else {}),
-                **({"thinkingConfig": {"thinkingBudget": thinking_budget}} if thinking_budget else {})
-            }
-        }
-
-        for attempt in range(max_retries):
-            try:
-                response = requests.post(url, headers=headers, json=payload, timeout=120)
-                response.raise_for_status()
-                result = response.json()
-
-                if "candidates" in result and result["candidates"]:
-                    reply = result["candidates"][0]["content"]["parts"][0]["text"]
-                    return reply, None
-                else:
-                    return None, "No response generated"
-
-            except requests.exceptions.HTTPError as e:
-                status_code = e.response.status_code
-                retryable_errors = [429, 500, 502, 503, 504]
-
-                if status_code in retryable_errors and attempt < max_retries - 1:
-                    import time
-                    wait_time = 10 * (2 ** attempt) if status_code == 429 else 2 * (2 ** attempt)
-                    time.sleep(wait_time)
-                else:
-                    return None, f"HTTP error {status_code}: {str(e)}"
-
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    import time
-                    time.sleep(2 * (2 ** attempt))
-                else:
-                    return None, str(e)
-
-        return None, "Max retries exceeded"
 
     # Process all items (text responses, PDF pages, or images)
     all_results = []
@@ -3988,11 +3997,11 @@ def summarize_ensemble(
     stepback_insights = {}
     if step_back_prompt:
         print("\nGathering step-back insights...")
-        stepback_insights = gather_stepback_insights(
-            model_configs=model_configs,
-            context=input_description or "text summarization",
-            question=f"What are the key factors to consider when summarizing text{f' with a focus on {focus}' if focus else ''}?"
+        focus_clause = f" with a focus on {focus}" if focus else ""
+        stepback_prompt = (
+            f"What are the key factors to consider when summarizing text{focus_clause}?"
         )
+        stepback_insights = gather_stepback_insights(model_configs, stepback_prompt)
 
     # Initialize results storage
     all_results = []  # List of dicts, one per input item
@@ -4053,7 +4062,7 @@ def summarize_ensemble(
 
                 # Handle Google multimodal differently
                 if cfg["provider"] == "google" and pdf_mode != "text":
-                    response = _call_google_multimodal(
+                    response, error = _call_google_multimodal(
                         client=client,
                         messages=messages,
                         json_schema=json_schema,
@@ -4115,7 +4124,7 @@ def summarize_ensemble(
                 effective_thinking = thinking_budget if cfg["provider"] in ("google", "openai", "anthropic", "huggingface", "huggingface-together") else None
 
                 if cfg["provider"] == "google":
-                    response = _call_google_multimodal(
+                    response, error = _call_google_multimodal(
                         client=client,
                         messages=messages,
                         json_schema=json_schema,

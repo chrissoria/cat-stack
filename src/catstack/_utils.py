@@ -7,7 +7,6 @@ encoding, and other common operations used across the package.
 
 import json
 import re
-import regex
 
 __all__ = [
     # JSON utilities
@@ -88,15 +87,55 @@ def build_json_schema(categories: list, include_additional_properties: bool = Tr
     return schema
 
 
+def _extract_balanced_json(text: str) -> str | None:
+    """Return the first balanced-brace JSON object substring in text, or None.
+
+    String-aware: a `{` or `}` inside a JSON string (between unescaped double
+    quotes) doesn't change scan depth. Replaces the prior `regex.findall` with
+    a recursive `(?R)` pattern — same semantics for well-formed input, but
+    correct on inputs like `{"summary": "see Fig {3}"}` (the regex version
+    truncated at the first `}` inside the string).
+    """
+    if text is None:
+        return None
+
+    depth = 0
+    start = None
+    in_string = False
+    escape = False
+    for i, ch in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if ch == '\\':
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == '{':
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == '}':
+            if depth == 0:
+                continue
+            depth -= 1
+            if depth == 0 and start is not None:
+                return text[start:i + 1]
+    return None
+
+
 def extract_json(reply: str) -> str:
     """Extract JSON from model reply."""
     if reply is None:
         return '{"1":"e"}'
 
-    extracted = regex.findall(r'\{(?:[^{}]|(?R))*\}', reply, regex.DOTALL)
-    if extracted:
-        # Clean up the JSON string
-        return extracted[0].replace('[', '').replace(']', '').replace('\n', '').replace(" ", '')
+    extracted = _extract_balanced_json(reply)
+    if extracted is not None:
+        return extracted.replace('[', '').replace(']', '').replace('\n', '').replace(" ", '')
     else:
         return '{"1":"e"}'
 

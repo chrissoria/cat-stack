@@ -28,7 +28,6 @@ dependencies = [
   "pandas",
   "tqdm",
   "requests",
-  "regex",
 ]
 
 [project.optional-dependencies]
