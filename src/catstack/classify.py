@@ -189,6 +189,13 @@ def classify(
             (the fraction of models that match the consensus decision)
             so callers can inspect per-row confidence and gate
             downstream actions on it.
+
+            For even-model ensembles with `consensus_threshold="majority"`,
+            pair with `embedding_tiebreaker=True` to resolve true 50/50
+            ties via embedding-centroid similarity instead of the
+            default "tie → 0". The tiebreaker also adds a
+            `category_N_resolved_by` audit column showing whether each
+            cell was decided by `"vote"` or `"centroid"`.
         survey_question (str): Deprecated alias for `description`. Pass
             `description=` instead. If provided non-empty, emits a
             DeprecationWarning and is mirrored to `description` when
@@ -271,9 +278,15 @@ def classify(
         embedding_tiebreaker (bool): If True, use embedding centroids to
             resolve true ties in ensemble consensus. Builds per-category
             centroids from unanimously-agreed rows and compares tied texts
-            to those centroids. Only applies to multi-model ensemble mode
-            with text input. Requires: pip install cat-llm[embeddings].
-            Default False.
+            to those centroids; the closer centroid wins. Most useful when
+            `consensus_threshold="majority"` is used with an even-model
+            ensemble — the default behavior is "tie → 0", and this
+            replaces that default with an evidence-based decision per
+            tied row. Adds a `category_N_resolved_by` audit column to
+            the output (values: `"vote"` or `"centroid"`). Only applies
+            to multi-model ensemble mode with text input; not yet
+            supported in `batch_mode=True`. Requires:
+            pip install cat-llm[embeddings]. Default False.
         min_centroid_size (int): Minimum number of unanimously-agreed rows
             needed to build a centroid for a category. Categories with fewer
             confident rows fall back to vote-based consensus. Default 3.

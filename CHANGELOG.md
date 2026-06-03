@@ -37,6 +37,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consensus, 0.0-1.0) for multi-model runs — use them to gate
   downstream actions on per-row confidence. Now mentioned in the
   classify() and aggregate_results() docstrings.
+
+  Recommended companion: pair `consensus_threshold="majority"` with
+  `embedding_tiebreaker=True` (existing parameter, requires
+  `cat-llm[embeddings]`) for even-model ensembles. The tiebreaker
+  runs *after* aggregate_results, detects true 50/50 ties exactly,
+  builds per-category centroids from unanimously-agreed rows, and
+  picks the closer centroid for each tied row. Adds a
+  `category_N_resolved_by` audit column (values: `"vote"` or
+  `"centroid"`). Not yet supported in `batch_mode`; structured
+  meta-LLM "Senate" breakers tracked as task #47.
 - **`strip_html_tags` no longer leaks attribute values or misses void
   elements.** The regex implementation had two concrete failure modes:
   (a) `[^>]*` terminated at the first `>` even when inside a quoted
