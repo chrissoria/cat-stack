@@ -145,6 +145,57 @@ All providers use the same `(model_name, provider, api_key)` tuple format. Provi
 - **Embedding similarity** tiebreaker for ensemble consensus ties
 - **Pilot test** — validate classifications on a small sample before committing to the full run
 
+## Future work / contributions welcome
+
+The following items are tracked but not yet implemented. PRs welcome —
+each entry includes the scope I'd suggest if someone wants to pick it up.
+
+- **Standalone SambaNova provider.** Currently SambaNova-hosted models
+  are reachable through the HuggingFace router suffix
+  (`meta-llama/...:sambanova`), but there's no direct
+  `provider="sambanova"` path that talks to SambaNova's own
+  OpenAI-compatible endpoint. Wiring it up means a new
+  `PROVIDER_CONFIG` entry, the right base URL
+  (`https://api.sambanova.ai/v1`), token-detection rules in
+  `detect_provider`, and a smoke test against one of their cheap
+  models (e.g. `Meta-Llama-3.1-8B-Instruct`).
+
+- **Consolidate HuggingFace-suffix dispatch.** The strings
+  `"huggingface"` and `"huggingface-together"` are currently
+  hardcoded in ~30 dispatch sites across
+  `pdf_functions.py` / `image_functions.py` /
+  `text_functions_ensemble.py` / `_chunked.py`. Adding a new router
+  suffix (e.g. `huggingface-fireworks`) means updating every one of
+  them. The cleaner refactor is a single
+  `_is_openai_compatible(model_source)` helper that matches anything
+  starting with `huggingface` plus the static list
+  (openai/perplexity/xai). Same shape as our existing
+  `_sanitize_google_schema` helper. Touches a lot of sites but each
+  edit is mechanical.
+
+- **Meta-LLM "Senate VP" tiebreaker + batch_mode support for
+  `embedding_tiebreaker`.** The existing `embedding_tiebreaker=True`
+  resolves true 50/50 ties via centroid similarity, but only in
+  synchronous ensemble mode. Two related extensions: (a) a meta-LLM
+  tie-breaker that invokes a separate model on tied rows
+  (`tie_break="meta_model"` with a configurable model); (b) extend
+  the existing centroid tiebreaker to work inside `batch_mode=True`
+  by running it after the batch results come back, before
+  `build_output_dataframes`. The infrastructure for both is already
+  in `_tiebreaker.py`; the meta-LLM variant would be a new resolver
+  function called from `resolve_ties_with_centroids`.
+
+- **Schema-permafail retry short-circuit.** When a model's
+  classification permanently fails schema validation across all
+  available retry budgets, the framework keeps spending API calls.
+  A short-circuit that detects "this model + this input is producing
+  the same invalid output N times in a row" and bails out early
+  would save quota. Scope was narrowed earlier (after the
+  HF-SMALL-MODEL fix reduced the wasted-retries surface area), so
+  there's a real risk this stays low-value; recommend writing the
+  detection metric first, instrumenting an actual run, and only
+  building the short-circuit if the metric says it would have helped.
+
 ## License
 
 GPL-3.0-or-later
