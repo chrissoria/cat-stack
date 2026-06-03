@@ -605,8 +605,17 @@ def classify(
     # ~1 GB RAM + load time when no rows actually need rescuing). The dep
     # check + cache verification still run upfront -- that's the fast part
     # and lets us cleanly disable the formatter if deps can't be installed.
+    #
+    # Three states for `json_formatter` at this point:
+    #   True  → explicit (or Ollama/two_step inferred) opt-in. Eager dep
+    #           check + state with `_consent="approved"`. Existing behavior.
+    #   False → explicit opt-out. No formatter_state, formatter never runs.
+    #   None  → fell through the auto-enable checks above. Auto-mode: build a
+    #           placeholder state; deps NOT loaded; on the first malformed
+    #           JSON row, `_try_formatter_fallback` will prompt for consent
+    #           (or print a non-TTY suggestion and skip).
     _formatter_state = None
-    if json_formatter:
+    if json_formatter is True:
         try:
             from ._formatter import ensure_formatter_available, load_formatter
 
@@ -622,6 +631,8 @@ def classify(
                     # and the model.generate() call need single-threaded
                     # execution — transformer models are not thread-safe.
                     "_lock": threading.Lock(),
+                    # Explicit opt-in == already-consented.
+                    "_consent": "approved",
                 }
             else:
                 json_formatter = False
@@ -630,6 +641,22 @@ def classify(
             json_formatter = False
             print(f"[CatLLM] JSON formatter unavailable: {e}")
             print("[CatLLM] Continuing without JSON formatter fallback.")
+    elif json_formatter is None:
+        # Auto-mode placeholder. Deps NOT loaded; loader populated lazily
+        # when consent is approved. The malformed-JSON fallback path checks
+        # `_consent` before touching the formatter:
+        #   "auto"      → prompt now (cached for the rest of the run)
+        #   "approved"  → load + run as usual
+        #   "declined"  → skip, return the raw row
+        _formatter_state = {
+            "model": None,
+            "tokenizer": None,
+            "device": None,
+            "_loaded": False,
+            "_loader": None,  # set after consent
+            "_lock": threading.Lock(),
+            "_consent": "auto",
+        }
 
     # =========================================================================
     # Embedding-based probability scores (opt-in)

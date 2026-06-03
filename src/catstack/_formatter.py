@@ -42,31 +42,26 @@ def _check_dependencies():
         )
 
 
-def _ensure_dependencies(verbose: bool = True) -> bool:
-    """Ensure formatter Python dependencies are installed.
-
-    Tries to import torch/transformers/accelerate. If any are missing,
-    auto-installs them via pip after printing a clear warning about the
-    download size (~1.5 GB total). Returns True on success, False on
-    install failure.
-    """
+def _check_dependencies_installed() -> bool:
+    """Pure check — returns True if all formatter deps import successfully.
+    No side effects, no install attempts."""
     try:
         import torch  # noqa: F401
         import transformers  # noqa: F401
         import accelerate  # noqa: F401
         return True
     except ImportError:
-        pass
+        return False
 
+
+def _install_dependencies(verbose: bool = True) -> bool:
+    """Run `pip install` for the formatter deps. Caller is responsible for
+    obtaining user consent before calling this — it does not prompt.
+
+    Returns True if deps are importable after install, False otherwise.
+    """
     if verbose:
-        print(
-            "\n[CatLLM] JSON formatter dependencies (transformers, torch, "
-            "accelerate)\n"
-            "  are not installed in this Python environment. Installing now\n"
-            "  (~1.5 GB download; one-time). To skip this and disable the\n"
-            "  formatter, pass json_formatter=False."
-        )
-
+        print("[CatLLM] Installing formatter dependencies (~1.5 GB)…")
     import subprocess
     try:
         subprocess.check_call(
@@ -77,19 +72,100 @@ def _ensure_dependencies(verbose: bool = True) -> bool:
         if verbose:
             print(
                 f"[CatLLM] Failed to install formatter dependencies ({e}).\n"
-                "  Install manually: pip install 'cat-llm[formatter]'"
+                "  Install manually: pip install 'cat-stack[formatter]'"
             )
         return False
+    return _check_dependencies_installed()
 
-    # Verify import works now
+
+def _prompt_formatter_consent(model_label: str = "the current model") -> str:
+    """Interactive consent prompt for the JSON formatter fallback.
+
+    Two paths depending on whether the formatter dependencies are already
+    installed:
+      - Deps installed: asks whether to load the ~1 GB formatter model.
+      - Deps missing:   asks whether to download deps (~1.5 GB) AND load.
+
+    Non-TTY contexts (CI, batch scripts, headless notebooks): prints a
+    one-time suggestion and returns "declined" without blocking on input.
+
+    Returns "approved" or "declined". On approval with deps missing,
+    also installs the deps before returning.
+    """
+    deps_installed = _check_dependencies_installed()
+
+    if not sys.stdin.isatty():
+        if deps_installed:
+            print(
+                f"\n[CatLLM] Malformed JSON from {model_label}. The JSON "
+                "formatter could recover this — pass json_formatter=True "
+                "to enable, or json_formatter=False to silence this suggestion."
+            )
+        else:
+            print(
+                f"\n[CatLLM] Malformed JSON from {model_label}. The JSON "
+                "formatter could recover, but its deps (~1.5 GB) aren't "
+                "installed. Run `pip install cat-stack[formatter]` and pass "
+                "json_formatter=True to enable, or json_formatter=False to "
+                "silence this suggestion."
+            )
+        return "declined"
+
+    if deps_installed:
+        prompt = (
+            f"\n[CatLLM] {model_label} produced malformed JSON on the first row.\n"
+            "  The JSON formatter can re-format the model's prose output\n"
+            "  into valid catstack JSON for this and subsequent rows.\n"
+            "    Cost: ~1 GB RAM (one-time load).\n"
+            "  Use the formatter for this run? (Y/n): "
+        )
+    else:
+        prompt = (
+            f"\n[CatLLM] {model_label} produced malformed JSON on the first row.\n"
+            "  The JSON formatter can re-format the model's prose output\n"
+            "  into valid catstack JSON for this and subsequent rows.\n"
+            "    Cost: ~1.5 GB download (transformers + torch + accelerate)\n"
+            "         + ~1 GB RAM (one-time load).\n"
+            "  Download deps and use the formatter? (Y/n): "
+        )
+
     try:
-        import torch  # noqa: F401
-        import transformers  # noqa: F401
+        answer = input(prompt).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("\n[CatLLM] No input received — skipping formatter.")
+        return "declined"
+
+    if answer in ("", "y", "yes"):
+        if not deps_installed:
+            if not _install_dependencies(verbose=True):
+                print("[CatLLM] Continuing without formatter.")
+                return "declined"
+        return "approved"
+    print("[CatLLM] Continuing without formatter.")
+    return "declined"
+
+
+def _ensure_dependencies(verbose: bool = True) -> bool:
+    """Back-compat: ensure deps are installed, auto-installing if missing.
+
+    Still used by the explicit `json_formatter=True` path where the user
+    has already implicitly consented by passing True. The new
+    `json_formatter=None` ("auto") path uses `_prompt_formatter_consent`
+    plus `_install_dependencies` directly so the install requires an
+    explicit yes.
+    """
+    if _check_dependencies_installed():
         return True
-    except ImportError as e:
-        if verbose:
-            print(f"[CatLLM] Formatter deps installed but import failed: {e}")
-        return False
+
+    if verbose:
+        print(
+            "\n[CatLLM] JSON formatter dependencies (transformers, torch, "
+            "accelerate)\n"
+            "  are not installed. Installing now (~1.5 GB download; one-time).\n"
+            "  To skip this and disable the formatter, pass json_formatter=False."
+        )
+
+    return _install_dependencies(verbose=verbose)
 
 
 def _is_model_cached() -> bool:

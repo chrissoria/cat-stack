@@ -29,6 +29,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   because the failure mode (connection refused on :11434) is confusing
   for users who meant a hosted model.
 
+- **JSON-formatter activates on demand for users who didn't opt in.** When
+  `json_formatter` isn't explicitly set (the new default), the first
+  malformed-JSON row of a run now triggers an interactive consent prompt
+  instead of silently producing broken output. Two paths depending on
+  whether the formatter dependencies are installed:
+  - **Deps installed:** *"Use the formatter for this run? (Y/n)"* —
+    one-time ~1 GB RAM load.
+  - **Deps missing:** *"Download deps (~1.5 GB) and use the formatter?
+    (Y/n)"* — install only proceeds after the explicit yes.
+  Non-TTY contexts (CI, batch scripts, headless notebooks) decline
+  silently and print a one-time suggestion instead. The decision is
+  cached on `formatter_state` so a 50-row run with one malformed early
+  row doesn't re-prompt 49 times. Backward-compat: `json_formatter=True`
+  keeps its existing eager-load + auto-install behavior (the user has
+  already implicitly consented by passing `True`), and
+  `json_formatter=False` opts out absolutely.
+- **`_ensure_dependencies` no longer silently pip-installs ~1.5 GB of
+  transformer deps.** This was an original review finding (L19): the
+  auto-install ran without asking, surprising Stata / Rscript users with
+  a multi-minute hang. The auto-install path now requires either explicit
+  `json_formatter=True` (implicit consent) or a `(Y/n)` answer through
+  the new `_prompt_formatter_consent` flow.
 - **JSON-formatter fallback path is now thread-safe.** When
   `classify(json_formatter=True, ...)` runs under a `ThreadPoolExecutor`,
   the per-row `_try_formatter_fallback` helper could fire two distinct

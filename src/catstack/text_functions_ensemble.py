@@ -2800,6 +2800,12 @@ Categorize text responses {cove_categorize}:
         if is_valid:
             return json_result
 
+        # Fast skip — once consent has been declined for this run, every
+        # subsequent malformed row returns immediately without touching
+        # the lock.
+        if formatter_state.get("_consent") == "declined":
+            return json_result
+
         # Fast path didn't apply — we need the formatter. Two races here
         # under ThreadPoolExecutor:
         #   1. Concurrent lazy-load: two workers both see `_loaded=False`,
@@ -2812,6 +2818,23 @@ Categorize text responses {cove_categorize}:
         # safe even if a caller forgot to pre-create it.
         lock = formatter_state.setdefault("_lock", threading.Lock())
         with lock:
+            # Auto-mode consent prompt: fires on the first malformed row of
+            # the run. Cached after the first answer so no re-prompts.
+            consent = formatter_state.get("_consent")
+            if consent == "auto":
+                from ._formatter import _prompt_formatter_consent
+                consent = _prompt_formatter_consent()
+                formatter_state["_consent"] = consent
+                if consent == "approved":
+                    # Defer this import until consent is granted — `_formatter`
+                    # imports transformers/torch, which we don't want to load
+                    # until the user has said yes.
+                    from ._formatter import load_formatter
+                    formatter_state["_loader"] = load_formatter
+
+            if formatter_state.get("_consent") != "approved":
+                return json_result
+
             if not formatter_state.get("_loaded"):
                 print(
                     "\n[CatLLM] First malformed-JSON row encountered -- loading\n"
