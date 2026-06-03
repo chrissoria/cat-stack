@@ -2,8 +2,8 @@ r"""
 Tests for _extract_balanced_json — the stdlib helper that replaced
 regex.findall(r'\{(?:[^{}]|(?R))*\}', ...).
 
-The helper backs extract_json() in _utils.py and text_functions.py, plus
-the JSON extraction in image_functions/pdf_functions/text_functions_ensemble.
+The helper backs extract_json() in text_functions.py plus the JSON
+extraction in image_functions / pdf_functions / text_functions_ensemble.
 Previously these used the `regex` module's recursive subpattern, which had
 two issues: it didn't know about JSON string semantics (would truncate at
 the first `}` inside a string), and one call site forgot to import it
@@ -12,7 +12,8 @@ the first `}` inside a string), and one call site forgot to import it
 
 import pytest
 
-from cat_stack._utils import _extract_balanced_json, extract_json
+from cat_stack._utils import _extract_balanced_json
+from cat_stack.text_functions import extract_json
 
 
 class TestExtractBalancedJson:

@@ -11,7 +11,6 @@ import re
 __all__ = [
     # JSON utilities
     "build_json_schema",
-    "extract_json",
     "validate_classification_json",
     "ollama_two_step_classify",
     # Label cleaning
@@ -126,18 +125,6 @@ def _extract_balanced_json(text: str) -> str | None:
             if depth == 0 and start is not None:
                 return text[start:i + 1]
     return None
-
-
-def extract_json(reply: str) -> str:
-    """Extract JSON from model reply."""
-    if reply is None:
-        return '{"1":"e"}'
-
-    extracted = _extract_balanced_json(reply)
-    if extracted is not None:
-        return extracted.replace('[', '').replace(']', '').replace('\n', '').replace(" ", '')
-    else:
-        return '{"1":"e"}'
 
 
 def validate_classification_json(json_str: str, num_categories: int) -> tuple[bool, dict | None]:

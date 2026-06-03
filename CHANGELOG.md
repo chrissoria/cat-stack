@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Removed dead `_utils.extract_json` duplicate.** Two versions of
+  `extract_json` existed: `_utils.extract_json` (used the older
+  `.replace(" ", "")` approach which broke spaces in summary strings)
+  and `text_functions.extract_json` (parses + reserializes, preserves
+  spaces inside string values). Nothing in `src/` imported the
+  `_utils` version; only one test file imported it. Removed the
+  duplicate and the test now imports from `text_functions`.
 - **`system_prompt` is no longer silently dropped in `batch_mode=True`.**
   `classify(system_prompt="...", batch_mode=True)` and the sync version
   diverged: sync forwarded the system_prompt through to
