@@ -8,6 +8,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A single chunk's exception no longer kills parallel category
+  exploration.** `explore_common_categories(..., max_workers>1)` used
+  `pass_idx, div_idx, reply, error = future.result()` with no try/except
+  and a worker (`_call_chunk`) that didn't catch exceptions itself. A
+  transient network glitch in one chunk (anything outside
+  `client.complete()`'s retry budget — DNS failure, TLS reset, etc.)
+  would re-raise from `future.result()` and abort the entire parallel
+  loop, losing every other chunk's work that had already completed.
+  Wrapped the boundary in try/except: chunk exceptions are logged to
+  stderr with the same `[CatStack] Warning: chunk div=X pass=Y ...`
+  format the existing in-band error path uses, and the loop continues.
+  Audited the other five `future.result()` sites in the codebase
+  (text_functions_ensemble.py x3, _batch.py x2 already fixed above);
+  the three in text_functions_ensemble.py wrap `classify_single` /
+  `summarize_single_item` which already catch all exceptions internally,
+  so no isolation issue there.
+- **One model's batch failure no longer kills the entire ensemble run.**
+  `run_batch_ensemble_classify` and `run_batch_ensemble_summarize` both
+  iterated `for future in as_completed(futures): _, result =
+  future.result()` with no try/except. Any exception from one model's
+  batch pipeline (BatchJobFailedError, BatchJobExpiredError, TimeoutError,
+  RuntimeError on missing output_file_id, RequestException on the
+  submission HTTP call, etc.) propagated out of the loop and aborted
+  the entire ensemble — losing every other model's results, including
+  ones that had already completed successfully. Wrapped each
+  `future.result()` in try/except: failures are logged with the model
+  name and exception type, the failed model's results dict is set to
+  `{}`, and the loop continues. Downstream `.get(idx, (None, "Missing
+  from batch results"))` cleanly handles the empty dict — every row
+  for the failed model gets "Missing from batch results" and the
+  DataFrame returns with that model's column empty rather than
+  raising. The other models' columns are populated normally.
+- **Anthropic batches that end with all requests errored now surface as
+  failures instead of silent empty results.** Anthropic's batch API
+  uses a single terminal `processing_status` ("ended") for every
+  outcome — fully succeeded, fully errored, fully canceled, fully
+  expired, or any mix. The polling code previously treated "ended" as
+  unconditional success and returned status_data; per-request errors
+  got surfaced at parse time as `(None, error_msg)` per row. That
+  works for the mixed case but is misleading when 0/N requests
+  succeeded: the caller saw a DataFrame of all-None values for that
+  model with no clear log signal that the entire batch was dead.
+  Added `_inspect_anthropic_terminal_state(status_data, job_id)` to
+  inspect `request_counts.succeeded / errored / canceled / expired`
+  when state reaches "ended": (a) if 0 succeeded and all canceled
+  → `BatchJobExpiredError`; (b) if 0 succeeded and all expired
+  → `BatchJobExpiredError`; (c) if 0 succeeded otherwise
+  → `BatchJobFailedError` with the full breakdown in the message;
+  (d) if partial (some succeeded + some failed) → print warning and
+  continue (parse layer still surfaces per-row errors). Combined with
+  the failure-isolation fix above, an all-errored Anthropic batch
+  becomes a clean per-model failure in an ensemble rather than an
+  ensemble-wide abort. Verified live: a 2-item Anthropic batch with
+  valid payload completes normally (state=ended, succeeded=2,
+  errored=0) — the inspection helper returns silently on the
+  all-success path, no behavior change for healthy batches.
+
+- **`chat_template_kwargs` no longer breaks classify() on Groq-routed HF
+  models.** `_build_openai_payload` injects
+  `chat_template_kwargs={"enable_thinking": False}` whenever
+  `thinking_budget=0` (the classify() default) and the provider is
+  `huggingface` — useful for stopping Qwen3-family models from emitting
+  `<think>` tags, but the Groq router (which sits behind HF Inference
+  Providers for Llama-3.x and `openai/gpt-oss-*`) rejects the property
+  outright:
+  `"property 'chat_template_kwargs' is unsupported"` (HTTP 400). Pre-fix,
+  every row burned all retries on this deterministic 400 and the
+  resulting DataFrame was full of `processing_status: 'error'`. A live
+  stress sweep documented this hitting Llama-3.3-70B-Instruct and
+  openai/gpt-oss-120b (and cascading into the parallel, many-categories,
+  and unicode-category-name scenarios — same root cause).
+  Fix mirrors the existing `response_format` strip-and-retry pattern in
+  the 400 handler: detect `"chat_template_kwargs"` + `"unsupported"` in
+  the body, pop the kwarg from the payload, retry immediately, and cache
+  the decision on the client (`_warned_no_chat_template_kwargs`) so
+  subsequent rows skip the doomed payload from the start. Models on
+  routers that *do* honor the kwarg (GLM-4.5, DeepSeek-R1 via the
+  generic HF Inference Providers dispatcher) are unaffected. 4 new
+  unit tests + a live smoke test against the real Groq router confirm
+  the fix; the live test now classifies 3 rows in 2s where pre-fix all 3
+  rows failed.
+
 - **`pdf_multi_class` / `explore_pdf_categories` now route
   `model_source="huggingface-together"` correctly.** The upstream
   validation list (`explore_pdf_categories`) and the OpenAI-compatible

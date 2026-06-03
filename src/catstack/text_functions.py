@@ -783,7 +783,16 @@ def explore_common_categories(
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(_call_chunk, job): job for job in all_jobs}
             for future in tqdm(as_completed(futures), total=len(all_jobs), desc="Processing chunks (parallel)"):
-                pass_idx, div_idx, reply, error = future.result()
+                job = futures[future]
+                job_pass_idx, job_div_idx, _ = job
+                try:
+                    pass_idx, div_idx, reply, error = future.result()
+                except Exception as e:
+                    sys.stderr.write(
+                        f"[CatStack] Warning: chunk div={job_div_idx+1} pass={job_pass_idx+1} "
+                        f"raised {type(e).__name__}: {e}. Skipping.\n"
+                    )
+                    continue
                 if error:
                     sys.stderr.write(
                         f"[CatStack] Warning: chunk div={div_idx+1} pass={pass_idx+1} failed: {error}. Skipping.\n"

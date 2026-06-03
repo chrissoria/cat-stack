@@ -102,6 +102,58 @@ class BatchJobFailedError(RuntimeError):
     pass
 
 
+def _inspect_anthropic_terminal_state(status_data: dict, job_id: str) -> None:
+    """Inspect an Anthropic batch in `processing_status == "ended"`.
+
+    Anthropic uses a single terminal state ("ended") for all outcomes —
+    fully succeeded, fully errored, fully canceled, fully expired, or
+    any mix. The polling code treats "ended" as success and returns
+    status_data; per-request errors get surfaced at parse time. That
+    works for the mixed case but is misleading when 0/N requests
+    succeeded: the caller silently gets a DataFrame of all-error rows
+    with no clear signal that the whole batch was dead.
+
+    This helper raises the appropriate exception when the batch is
+    *uniformly* failed/canceled/expired, and prints a warning for the
+    partial-failure case. Returns silently when the batch has any
+    successes (combined with per-row errors from parse layer).
+    """
+    counts = status_data.get("request_counts", {})
+    succeeded = counts.get("succeeded", 0)
+    errored = counts.get("errored", 0)
+    canceled = counts.get("canceled", 0)
+    expired = counts.get("expired", 0)
+    total = succeeded + errored + canceled + expired
+
+    if total == 0:
+        return
+
+    if succeeded == 0:
+        if canceled == total:
+            raise BatchJobExpiredError(
+                f"Anthropic batch '{job_id}' was canceled (canceled={canceled}). "
+                f"Job ID saved above — check provider dashboard for details."
+            )
+        if expired == total:
+            raise BatchJobExpiredError(
+                f"Anthropic batch '{job_id}' expired before any requests succeeded "
+                f"(expired={expired})."
+            )
+        raise BatchJobFailedError(
+            f"Anthropic batch '{job_id}' ended with 0/{total} requests succeeded "
+            f"(errored={errored}, canceled={canceled}, expired={expired}). "
+            f"Check the provider dashboard for the error details."
+        )
+
+    if errored or canceled or expired:
+        print(
+            f"  [batch] Anthropic batch '{job_id}' partial: "
+            f"succeeded={succeeded}, errored={errored}, "
+            f"canceled={canceled}, expired={expired}. "
+            f"Errored rows will appear as failures in the output DataFrame."
+        )
+
+
 # =============================================================================
 # Auth headers
 # =============================================================================
@@ -451,6 +503,8 @@ def _poll_batch_job(
                     f"Batch job '{job_id}' failed (state: {state}). "
                     f"Check the provider dashboard for details."
                 )
+            if provider == "anthropic":
+                _inspect_anthropic_terminal_state(status_data, job_id)
             return status_data
 
         time.sleep(interval)
@@ -998,7 +1052,20 @@ def run_batch_ensemble_classify(
     with ThreadPoolExecutor(max_workers=len(model_configs)) as executor:
         futures = {executor.submit(_run_cfg, cfg): cfg for cfg in model_configs}
         for future in as_completed(futures):
-            model_key, result = future.result()
+            cfg = futures[future]
+            model_key = cfg["sanitized_name"]
+            try:
+                _, result = future.result()
+            except Exception as e:
+                print(
+                    f"\n[batch ensemble] Model '{cfg['model']}' ({cfg['provider']}) "
+                    f"failed: {type(e).__name__}: {e}"
+                )
+                print(
+                    f"  Other models will still complete; "
+                    f"this model's column will be empty."
+                )
+                result = {}
             all_model_results[model_key] = result
 
     all_results = []
@@ -1313,7 +1380,20 @@ def run_batch_ensemble_summarize(
     with ThreadPoolExecutor(max_workers=len(model_configs)) as executor:
         futures = {executor.submit(_run_cfg, cfg): cfg for cfg in model_configs}
         for future in as_completed(futures):
-            model_key, result = future.result()
+            cfg = futures[future]
+            model_key = cfg["sanitized_name"]
+            try:
+                _, result = future.result()
+            except Exception as e:
+                print(
+                    f"\n[batch ensemble] Model '{cfg['model']}' ({cfg['provider']}) "
+                    f"failed: {type(e).__name__}: {e}"
+                )
+                print(
+                    f"  Other models will still complete; "
+                    f"this model's column will be empty."
+                )
+                result = {}
             all_model_results[model_key] = result
 
     model_names = [cfg["sanitized_name"] for cfg in model_configs]
