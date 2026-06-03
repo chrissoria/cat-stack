@@ -170,9 +170,25 @@ def classify(
         consensus_threshold (str or float): For multi-model mode, agreement threshold.
             - "unanimous": 100% agreement (default — empirically produces
               the highest accuracy by aggressively eliminating false positives)
-            - "majority": 50% agreement
-            - "two-thirds": 67% agreement
-            - float: Custom threshold between 0 and 1
+            - "majority": STRICT majority — more than half of the models
+              must vote positive. Ties (50/50 splits on even-model
+              ensembles like 2-2 of 4) resolve to "0" (the negative
+              class). This matches sklearn's VotingClassifier default
+              and standard ensemble-literature treatment. For 2-model
+              ensembles, "majority" effectively requires unanimous
+              agreement on positive (there's no "more than half" of 2
+              without being all); use 3+ models for a non-degenerate
+              majority vote, or pass `0.5` numerically to keep the
+              old "tie favors positive" semantics.
+            - "two-thirds": 67% agreement (uses >= semantics)
+            - float: Custom threshold between 0 and 1, evaluated with
+              `>=` semantics (the user picked a number, they get the
+              literal interpretation).
+
+            The output DataFrame includes `category_N_agreement` columns
+            (the fraction of models that match the consensus decision)
+            so callers can inspect per-row confidence and gate
+            downstream actions on it.
         survey_question (str): Deprecated alias for `description`. Pass
             `description=` instead. If provided non-empty, emits a
             DeprecationWarning and is mirrored to `description` when

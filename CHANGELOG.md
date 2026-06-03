@@ -8,6 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`consensus_threshold="majority"` now uses strict majority — ties
+  resolve to "0", not "1".** *(BEHAVIOR CHANGE — listed in
+  ecosystem-memory as release-note-worthy.)* The old `positive_rate >=
+  0.5` rule meant a 50/50 tie on an even-model ensemble (2-2 of 4,
+  3-3 of 6, 1-1 of 2) arbitrarily defaulted to a positive
+  classification — biasing every tied row toward false-positive label
+  assignment. The fix matches: (a) the linguistic meaning of
+  "majority" — *more than half*; (b) sklearn's `VotingClassifier`
+  default (`np.argmax` picks the first class on a tie); (c) standard
+  ML ensemble-literature treatment (Kittler 1998, Kuncheva 2004,
+  Polikar 2006) — ties default to the negative class; (d)
+  parliamentary procedure — a motion fails on a tie.
+
+  Numeric thresholds are unchanged: `consensus_threshold=0.5` keeps
+  the `>=` semantics — when a user passes a number they get the
+  literal interpretation, including the old tie-favors-positive
+  behavior if they want it.
+
+  *Caveat for 2-model ensembles:* "majority" + 2 models effectively
+  requires unanimous positive agreement (a 1-1 split can never be
+  "more than half"). Use 3+ models for a non-degenerate majority
+  vote, or `consensus_threshold=0.5` numerically to keep the old
+  behavior.
+
+  Discoverability note: the output DataFrame already includes
+  `category_N_agreement` columns (fraction of models matching the
+  consensus, 0.0-1.0) for multi-model runs — use them to gate
+  downstream actions on per-row confidence. Now mentioned in the
+  classify() and aggregate_results() docstrings.
 - **`strip_html_tags` no longer leaks attribute values or misses void
   elements.** The regex implementation had two concrete failure modes:
   (a) `[^>]*` terminated at the first `>` even when inside a quoted

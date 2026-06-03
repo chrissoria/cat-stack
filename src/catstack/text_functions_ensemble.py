@@ -783,17 +783,37 @@ def aggregate_results(
         model_results: Dict mapping model name to (json_str, error)
         categories: List of category names
         consensus_threshold: Threshold for majority vote. Can be:
-            - "majority": 50% agreement (default)
-            - "two-thirds": 67% agreement
-            - "unanimous": 100% agreement
-            - float: Custom threshold between 0 and 1
+            - "majority": STRICT majority — more than half must vote
+              positive. Ties (50/50 splits on even-model ensembles)
+              resolve to "0". For a 2-model ensemble this effectively
+              requires unanimous positive agreement; use 3+ models or
+              pass `0.5` numerically for the old `>=` behavior.
+            - "two-thirds": ~67% agreement (uses `>=` semantics)
+            - "unanimous": 100% agreement (uses `>=` semantics; same effect)
+            - float: Custom threshold between 0 and 1, evaluated with
+              `>=` semantics (user-specified numbers preserve the literal
+              interpretation).
         fail_strategy: How to handle failures ("partial" or "strict")
 
     Returns:
-        Dict with per_model results, consensus, agreement scores, and metadata
+        Dict with per_model results, consensus, agreement scores, and metadata.
+        `agreement[key]` is the fraction of models that match the consensus
+        decision for that category — useful as a per-row confidence score
+        for downstream gating (low agreement = the ensemble is split).
     """
     # Resolve string thresholds to numeric values
     threshold = _resolve_consensus_threshold(consensus_threshold)
+    # The `"majority"` string alias means STRICT majority — more than
+    # half — so a 50/50 tie (2-2 of 4, 3-3 of 6, etc.) resolves to "0",
+    # not "1". The old `>= 0.5` rule arbitrarily defaulted ties toward
+    # the positive label, biasing even-model ensembles toward
+    # false-positive assignments. Numeric thresholds (e.g. 0.5
+    # explicitly) keep `>=` semantics — the user picked a number and
+    # gets the literal interpretation.
+    _strict_majority = (
+        isinstance(consensus_threshold, str)
+        and consensus_threshold.lower().strip() == "majority"
+    )
     successful = {}
     failed_models = []
 
@@ -869,7 +889,10 @@ def aggregate_results(
                 votes.append(0)
 
         positive_rate = sum(votes) / num_successful if num_successful > 0 else 0
-        consensus_val = "1" if positive_rate >= threshold else "0"
+        if _strict_majority:
+            consensus_val = "1" if positive_rate > threshold else "0"
+        else:
+            consensus_val = "1" if positive_rate >= threshold else "0"
         consensus[key] = consensus_val
         # Agreement = fraction of models that match the consensus decision
         consensus_int = int(consensus_val)
