@@ -1,6 +1,6 @@
 # CatLLM Module Dependency Map
 
-High-level view of how `src/cat_stack/` modules depend on each other.
+High-level view of how `src/catstack/` modules depend on each other.
 
 ```
                          __init__.py
