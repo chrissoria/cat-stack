@@ -195,6 +195,35 @@ def _extract_page_text(pdf_path, page_index):
         return None, False, str(e)
 
 
+def _google_post_with_retry(url, headers, payload, max_retries=8, timeout=120):
+    """POST to Google's generateContent endpoint with retry on 429/5xx.
+
+    Module-level helper shared by `_call_google` and `_call_google_text_only`
+    (previously two identical closures). Passes `timeout=` so a hung gateway
+    can't stall the batch — every other POST in this module uses timeout=120.
+    """
+    import requests
+    import time
+
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=timeout)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            status_code = e.response.status_code if e.response is not None else None
+            retryable_errors = {429, 500, 502, 503, 504}
+
+            if status_code in retryable_errors and attempt < max_retries - 1:
+                wait_time = 10 * (2 ** attempt) if status_code == 429 else 2 * (2 ** attempt)
+                error_type = "Rate limited" if status_code == 429 else f"Server error {status_code}"
+                print(f"⚠️ {error_type}. Attempt {attempt + 1}/{max_retries}")
+                print(f"Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                raise
+
+
 # PDF multi-class (binary) function
 def pdf_multi_class(
     pdf_description,
@@ -698,24 +727,7 @@ Provide the final categorization in the same JSON format:"""
         """Handle Google API calls with native PDF support."""
         import requests
 
-        def make_google_request(url, headers, payload, max_retries=8):
-            for attempt in range(max_retries):
-                try:
-                    response = requests.post(url, headers=headers, json=payload)
-                    response.raise_for_status()
-                    return response.json()
-                except requests.exceptions.HTTPError as e:
-                    status_code = e.response.status_code
-                    retryable_errors = [429, 500, 502, 503, 504]
-
-                    if status_code in retryable_errors and attempt < max_retries - 1:
-                        wait_time = 10 * (2 ** attempt) if status_code == 429 else 2 * (2 ** attempt)
-                        error_type = "Rate limited" if status_code == 429 else f"Server error {status_code}"
-                        print(f"⚠️ {error_type}. Attempt {attempt + 1}/{max_retries}")
-                        print(f"Retrying in {wait_time}s...")
-                        time.sleep(wait_time)
-                    else:
-                        raise
+        make_google_request = _google_post_with_retry
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{user_model}:generateContent"
         headers = {
@@ -990,24 +1002,7 @@ Provide the final categorization in the same JSON format:"""
         """Handle Google API calls with text-only prompt."""
         import requests
 
-        def make_google_request(url, headers, payload, max_retries=8):
-            for attempt in range(max_retries):
-                try:
-                    response = requests.post(url, headers=headers, json=payload)
-                    response.raise_for_status()
-                    return response.json()
-                except requests.exceptions.HTTPError as e:
-                    status_code = e.response.status_code
-                    retryable_errors = [429, 500, 502, 503, 504]
-
-                    if status_code in retryable_errors and attempt < max_retries - 1:
-                        wait_time = 10 * (2 ** attempt) if status_code == 429 else 2 * (2 ** attempt)
-                        error_type = "Rate limited" if status_code == 429 else f"Server error {status_code}"
-                        print(f"⚠️ {error_type}. Attempt {attempt + 1}/{max_retries}")
-                        print(f"Retrying in {wait_time}s...")
-                        time.sleep(wait_time)
-                    else:
-                        raise
+        make_google_request = _google_post_with_retry
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{user_model}:generateContent"
         headers = {
@@ -1135,7 +1130,7 @@ Provide the final categorization in the same JSON format:"""
                 return _call_anthropic_text_only(base_prompt_text, step2_prompt, step3_prompt, step4_prompt)
             elif model_source == "google":
                 return _call_google_text_only(base_prompt_text, step2_prompt, step3_prompt, step4_prompt)
-            elif model_source in ["openai", "perplexity", "huggingface", "xai"]:
+            elif model_source in ["openai", "perplexity", "huggingface", "huggingface-together", "xai"]:
                 return _call_openai_text_only(base_prompt_text, step2_prompt, step3_prompt, step4_prompt)
             elif model_source == "mistral":
                 return _call_mistral_text_only(base_prompt_text, step2_prompt, step3_prompt, step4_prompt)
@@ -1201,7 +1196,7 @@ Provide the final categorization in the same JSON format:"""
             encoded_image_url = f"data:image/png;base64,{encoded_image}"
             pdf_content = {"type": "image_url", "image_url": {"url": encoded_image_url, "detail": "high"}}
 
-            if model_source in ["openai", "perplexity", "huggingface", "xai"]:
+            if model_source in ["openai", "perplexity", "huggingface", "huggingface-together", "xai"]:
                 return _call_openai_compatible(prompt, step2_prompt, step3_prompt, step4_prompt, pdf_content)
             elif model_source == "mistral":
                 return _call_mistral(prompt, step2_prompt, step3_prompt, step4_prompt, pdf_content)

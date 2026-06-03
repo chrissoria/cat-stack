@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`pdf_multi_class` / `explore_pdf_categories` now route
+  `model_source="huggingface-together"` correctly.** The upstream
+  validation list (`explore_pdf_categories`) and the OpenAI-compatible
+  call helpers both accepted `"huggingface-together"`, but
+  `_process_single_page`'s dispatch was hard-coded to
+  `["openai", "perplexity", "huggingface", "xai"]` in both the text-only
+  and image/PDF branches — so an HF-Together call passed every upstream
+  check, then crashed inside dispatch with
+  `ValueError("Unknown source! Choose from...")`. Added
+  `"huggingface-together"` to both dispatch lists. Verified live: a
+  text-mode call against `meta-llama/Llama-3.3-70B-Instruct-Turbo` via
+  `router.huggingface.co/together/v1` now classifies successfully end-to-end.
+- **Google PDF calls no longer block indefinitely on a hung gateway.**
+  `_call_google` and `_call_google_text_only` each contained their own
+  identical `make_google_request` closure, and both `requests.post(...)`
+  calls were missing `timeout=` — the only two POSTs in `pdf_functions.py`
+  without one (every other POST in the file uses `timeout=120`). A stalled
+  connection would block the worker forever. Extracted the duplicate
+  closure to module-level `_google_post_with_retry(...)` with
+  `timeout=120` baked in; both call sites now alias it
+  (`make_google_request = _google_post_with_retry`) so all existing
+  callers — including `pdf_chain_of_verification_google`, which receives
+  the function as a kwarg — keep working unchanged.
+
 - **`detect_provider` and `_detect_model_source` no longer disagree on the
   same model string.** Pre-fix, the two near-duplicate auto-detection
   functions used divergent substring rules (`_detect_model_source` was
