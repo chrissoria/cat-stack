@@ -29,6 +29,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   because the failure mode (connection refused on :11434) is confusing
   for users who meant a hosted model.
 
+- **JSON-formatter fallback path is now thread-safe.** When
+  `classify(json_formatter=True, ...)` runs under a `ThreadPoolExecutor`,
+  the per-row `_try_formatter_fallback` helper could fire two distinct
+  races: (1) multiple workers all seeing `formatter_state["_loaded"] ==
+  False` and each independently invoking the ~10 s, ~1 GB
+  `_loader()`; (2) concurrent `model.generate()` calls against the same
+  HuggingFace transformer model — which maintains internal KV-cache
+  state and is not thread-safe — could silently corrupt outputs. Added a
+  `threading.Lock` to `formatter_state["_lock"]` (pre-initialized in
+  `classify.py` where the dict is constructed; defensively
+  `setdefault`-ed inside the helper for robustness). The locked region
+  wraps both the lazy-load and the `run_formatter()` call; the
+  fast-path "JSON already parsed cleanly" check happens before
+  acquiring the lock, so the common case has zero overhead.
 - **`UnifiedLLMClient.complete()` retry logic hardened.** Four related
   problems addressed in one pass:
   - **`Retry-After` headers are now honored** on both 429 and 5xx

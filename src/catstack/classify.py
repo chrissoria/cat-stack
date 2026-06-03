@@ -6,6 +6,7 @@ supporting both single-model and multi-model (ensemble) classification.
 """
 
 import math
+import threading
 import warnings
 from typing import Union, Callable, Optional
 
@@ -616,6 +617,11 @@ def classify(
                     "device": None,
                     "_loaded": False,
                     "_loader": load_formatter,
+                    # Serializes the lazy-load and run_formatter calls across
+                    # ThreadPoolExecutor workers. Both the ~1 GB model load
+                    # and the model.generate() call need single-threaded
+                    # execution — transformer models are not thread-safe.
+                    "_lock": threading.Lock(),
                 }
             else:
                 json_formatter = False

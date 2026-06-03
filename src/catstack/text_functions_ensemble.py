@@ -44,6 +44,7 @@ __all__ = ["classify_ensemble", "multi_class_ensemble", "summarize_ensemble"]
 import json
 import os
 import re
+import threading
 import time
 import pandas as pd
 from pathlib import Path
@@ -2799,25 +2800,37 @@ Categorize text responses {cove_categorize}:
         if is_valid:
             return json_result
 
-        # Lazy load on first need
-        if not formatter_state.get("_loaded"):
-            print(
-                "\n[CatLLM] First malformed-JSON row encountered -- loading\n"
-                "  JSON formatter model into RAM now (one-time per session)."
-            )
-            fmt_model, fmt_tokenizer, fmt_device = formatter_state["_loader"]()
-            formatter_state["model"] = fmt_model
-            formatter_state["tokenizer"] = fmt_tokenizer
-            formatter_state["device"] = fmt_device
-            formatter_state["_loaded"] = True
+        # Fast path didn't apply — we need the formatter. Two races here
+        # under ThreadPoolExecutor:
+        #   1. Concurrent lazy-load: two workers both see `_loaded=False`,
+        #      both invoke `_loader()` (a ~10s, ~1 GB load), both race-write
+        #      to the shared dict.
+        #   2. Concurrent inference on the same transformer model is not
+        #      thread-safe — the KV cache can corrupt and outputs go wrong.
+        # Both fixed by serializing the load + run_formatter under one lock.
+        # `setdefault` is atomic under CPython's GIL so the lock itself is
+        # safe even if a caller forgot to pre-create it.
+        lock = formatter_state.setdefault("_lock", threading.Lock())
+        with lock:
+            if not formatter_state.get("_loaded"):
+                print(
+                    "\n[CatLLM] First malformed-JSON row encountered -- loading\n"
+                    "  JSON formatter model into RAM now (one-time per session)."
+                )
+                fmt_model, fmt_tokenizer, fmt_device = formatter_state["_loader"]()
+                formatter_state["model"] = fmt_model
+                formatter_state["tokenizer"] = fmt_tokenizer
+                formatter_state["device"] = fmt_device
+                formatter_state["_loaded"] = True
 
-        from ._formatter import run_formatter
-        fixed_output = run_formatter(
-            raw_reply, cats,
-            formatter_state["model"],
-            formatter_state["tokenizer"],
-            formatter_state["device"],
-        )
+            from ._formatter import run_formatter
+            fixed_output = run_formatter(
+                raw_reply, cats,
+                formatter_state["model"],
+                formatter_state["tokenizer"],
+                formatter_state["device"],
+            )
+
         fixed_json = extract_json(fixed_output)
         fixed_valid, _ = validate_classification_json(fixed_json, n)
         if fixed_valid:
