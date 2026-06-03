@@ -23,7 +23,9 @@ High-level view of how `src/cat_stack/` modules depend on each other.
                                  Ollama utilities)
                      calls/
               (stepback, CoVe, top_n)
-              leaf modules, no intra-pkg deps
+              per-strategy prompt + direct HTTP;
+              lazy intra-pkg deps for shared helpers
+              (e.g. _detect_huggingface_endpoint)
 ```
 
 ## Key relationships
@@ -39,7 +41,7 @@ High-level view of how `src/cat_stack/` modules depend on each other.
 | `explore.py` | Thin wrapper for `explore_common_categories` | `text_functions` |
 | `pdf_functions.py` | PDF classification | `text_functions`, `calls/pdf_*` |
 | `image_functions.py` | Image classification | `text_functions`, `calls/image_*` |
-| `calls/*` | Provider-specific prompt logic (stepback, CoVe, top_n) | *nothing* (leaf modules) |
+| `calls/*` | Provider-specific prompt assembly + direct HTTP for multi-step strategies (stepback, CoVe, top_n; plus image_* / pdf_* variants). Each leaf makes `requests.post` calls directly rather than routing through `UnifiedLLMClient.complete()` so it can express the strategy's specific shape (CoVe's multi-step pipeline, per-step `response_format={"type":"json_object"}`, per-question loop). | stdlib + `requests`; **lazy** `_detect_huggingface_endpoint` from `_providers` in `stepback` / `top_n` / `image_stepback` / `pdf_stepback` |
 
 ## `classify()` call chain
 
@@ -55,7 +57,7 @@ classify()                                          classify.py
        │    └─ check_ollama_running/model/pull()    _providers.py (via text_functions re-export)
        │
        ├─ [if categories="auto"]
-       │    └─ extract()                            main.py
+       │    └─ extract()                            extract.py
        │         └─ explore_common_categories()     text_functions.py
        │              └─ UnifiedLLMClient.complete() _providers.py
        │

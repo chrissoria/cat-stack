@@ -48,6 +48,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conversion branch so both flags travel together.
 
 ### Changed
+- **`ARCHITECTURE.md` updated to describe the `calls/` layer accurately.**
+  Previous entries claimed `calls/*` imports from "*nothing* (leaf
+  modules)" and labelled the diagram as "leaf modules, no intra-pkg
+  deps". The reality is that every leaf under `calls/` (stepback, CoVe,
+  top_n, plus the image_* and pdf_* variants) makes `requests.post`
+  calls directly rather than routing through `UnifiedLLMClient.complete()`
+  — by design, because each strategy is a shape (multi-step CoVe
+  pipeline with per-step JSON-mode toggles, per-question loop, per-provider
+  prompt tail) that doesn't fit `complete()`'s single-shot API. Four of
+  the leaves (`stepback`, `top_n`, `image_stepback`, `pdf_stepback`) also
+  do a *lazy* intra-package import of `_detect_huggingface_endpoint`
+  when `model_source == "huggingface"`. Documented both facts. Also
+  corrected the call-chain trace where `extract()` was sourced from
+  `main.py` — the function lives in `extract.py` (`main.py` has never
+  existed; this was the C1 documentation twin).
 - **`catstack.fetch_url_text` is now SSRF-safe and no longer papers over
   TLS errors.** Four hardening changes in `_web_fetch.py`, all
   stdlib-only:
