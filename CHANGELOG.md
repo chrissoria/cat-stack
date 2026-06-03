@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`system_prompt` is no longer silently dropped in `batch_mode=True`.**
+  `classify(system_prompt="...", batch_mode=True)` and the sync version
+  diverged: sync forwarded the system_prompt through to
+  `build_text_classification_prompt`, but the batch path's
+  `prompt_params` dict (both the single-model and ensemble variants in
+  classify.py) didn't include `system_prompt` as a key, and the two
+  consumers in _batch.py (`_run_one_batch_job`, `_run_one_sync_model`)
+  didn't read it back out. The user's custom system instruction —
+  including the output of `prompt_tune()` — silently disappeared the
+  moment they switched to batch mode. Added the key in both producers
+  and the kwarg in both consumers. Sync fallback path (used for HF /
+  Perplexity / Ollama within `batch_mode=True` ensembles) also
+  threaded so mixed-provider ensembles see consistent prompts.
+  *Known remaining gap (out of scope for this fix):*
+  `prompt_params["stepback_insights"]` is still hardcoded to `{}` in
+  the batch producers — step-back prompting computed in sync mode
+  isn't reproduced in batch mode. Will track separately if it
+  matters for users.
 - **Image directory loading is now case-insensitive.** `glob.glob('*.jpg')`
   is case-sensitive on every platform — directories with mixed-case
   extensions (e.g., `IMG_001.JPG` from many phone cameras, or
