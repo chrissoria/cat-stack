@@ -29,6 +29,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   because the failure mode (connection refused on :11434) is confusing
   for users who meant a hosted model.
 
+- **Models that 5xx persistently on `response_format` payloads now recover
+  automatically.** Some endpoints (notably HF's router for the small
+  Llama-3.2-1B variant) reliably return 502 Bad Gateway with an HTML
+  error body when the request body includes
+  `response_format: {"type": "json_object"}`, even though the response
+  body never mentions the parameter. The existing 400-handler couldn't
+  trigger because the keyword check requires `"structured"`,
+  `"response_format"`, or `"json_object"` in the response body — HTML
+  matches none of those. `complete()` now strips `response_format` once
+  per call on a 5xx that has NO `Retry-After` header (Retry-After is a
+  signal for transient overload, not a payload complaint), retries
+  immediately, and caches the decision on the client instance so
+  subsequent rows in the same run skip `response_format` from the start.
+  After the strip, prose-mode output is parsed by `extract_json`; if
+  that fails, the auto-formatter consent prompt fires for cleanup.
+  Verified live: Llama-3.2-1B + catstack's actual classification payload
+  went from 0 % success to producing valid classifications.
 - **JSON-formatter activates on demand for users who didn't opt in.** When
   `json_formatter` isn't explicitly set (the new default), the first
   malformed-JSON row of a run now triggers an interactive consent prompt

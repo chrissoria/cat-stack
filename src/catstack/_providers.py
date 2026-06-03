@@ -654,9 +654,19 @@ class UnifiedLLMClient:
         headers = self._get_headers()
         payload = self._build_payload(messages, json_schema, creativity, thinking_budget=thinking_budget, force_json=force_json)
 
+        # If a previous call on this client already discovered the endpoint
+        # rejects response_format (persistent 502s, etc.), drop it before
+        # even trying. Saves N-1 wasted strip-cycles in a multi-row run.
+        if getattr(self, "_skip_response_format", False) and "response_format" in payload:
+            payload.pop("response_format")
+
         # Track cumulative wait so a long string of transient errors can't
         # block the call indefinitely. See _MAX_TOTAL_WAIT_SECONDS.
         start = time.monotonic()
+        # Per-call flag: have we already tried stripping response_format on a
+        # transient error this call? Only strip once per call so we don't
+        # mutate payload on every retry tick.
+        stripped_response_format = False
 
         for attempt in range(max_retries):
             endpoint = self._get_endpoint()
@@ -707,9 +717,34 @@ class UnifiedLLMClient:
                     else:
                         return None, "Rate limit exceeded (retry budget or time cap)"
                 elif response.status_code >= 500:
-                    # Server error. Honor Retry-After if present; otherwise
-                    # jittered exponential backoff.
+                    # Server error. If the server included Retry-After, it's
+                    # explicitly saying "I'm overloaded, come back in N
+                    # seconds" — trust that, don't treat as a payload issue.
+                    # If no Retry-After and we haven't yet tried, strip
+                    # response_format once. HF's router for small Llama
+                    # variants reliably 502s when sent json_object with an
+                    # HTML error body (no Retry-After) — stripping fixes it
+                    # in practice. Cache the decision so subsequent rows on
+                    # the same client skip the doomed payload from the start.
                     wait_time = _parse_retry_after(response.headers.get("Retry-After"))
+                    if (
+                        wait_time is None
+                        and not stripped_response_format
+                        and "response_format" in payload
+                    ):
+                        stripped_response_format = True
+                        self._skip_response_format = True
+                        payload.pop("response_format")
+                        if not getattr(self, "_warned_no_structured", False):
+                            print(
+                                f"\n[CatLLM] Persistent {response.status_code} from "
+                                f"'{self.model}'. Retrying without response_format "
+                                f"(some endpoints reject json_object with a non-JSON "
+                                f"error body)."
+                            )
+                            self._warned_no_structured = True
+                        continue  # immediate retry, no backoff sleep
+                    # Honor Retry-After if present; otherwise jittered exponential.
                     if wait_time is None:
                         wait_time = _backoff_with_jitter(initial_delay, attempt)
                     elapsed = time.monotonic() - start
