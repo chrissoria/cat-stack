@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-06-03
+
+### Fixed
+- **xAI batch API contract refreshed to match the current `/v1/batches`
+  endpoint.** The old implementation in `_batch.py` was written against
+  an earlier draft of the xAI batch API and was broken end-to-end on
+  the current API: every batch submission returned `422 Unprocessable
+  Entity` immediately on create. Five xAI-specific sites in
+  `_batch.py` were updated; no other provider's code paths were
+  touched.
+
+  Changes (xAI only):
+    - `_build_jsonl_line`: each request is now wrapped in xAI's
+      tagged-union envelope — `{batch_request_id, batch_request:
+      {chat_get_completion: {…payload…}}}` — instead of the
+      OpenAI-compat `{custom_id, method, url, body}` shape that the
+      old endpoint accepted.
+    - `_submit_batch_job`: create body now sends the required `name`
+      field (was missing; was sending the no-longer-accepted
+      `completion_window`); the create response's ID field is read as
+      `batch_id` instead of `id`; the add-requests body wraps the list
+      under a `batch_requests` key.
+    - `_poll_batch_job`: state is now synthesized from the `state`
+      object's counters (`num_pending`, `num_success`, `num_error`,
+      `num_cancelled`) rather than a top-level state string — the
+      latter no longer exists in the response. Synthesized values
+      ("running", "completed", "failed", "cancelled") still fit the
+      existing terminal/success-set logic.
+    - `_download_batch_results`: results endpoint now returns
+      paginated JSON (`{results: [...], pagination_token}`) rather
+      than streaming JSONL. The fetcher now walks all pages and
+      re-serializes the result objects as JSONL so the existing
+      line-by-line parser is unchanged.
+    - `_parse_batch_results`: result-line shape changed to
+      `{batch_request_id, batch_result: {response:
+      {chat_get_completion: {…}}}, error_message?}` — read the new
+      field names; `chat_get_completion` is the standard chat
+      completion body that `client._parse_response()` already
+      handles.
+
+  Surfaced by the same eight-provider batch-mode smoke test from the
+  paper port; xAI returned `422` on submission before this fix.
+
+### Documented
+- **README caveat: Google's batch scheduler is slow on small jobs.**
+  The same smoke test that surfaced the xAI patch also exposed a
+  not-a-bug-but-worth-flagging operational reality: Google's batch
+  queue often leaves small jobs (a few rows) in `BATCH_STATE_PENDING`
+  for 30+ minutes — Google's published batch SLA is up to 24h. There's
+  no cat-stack fix; small Google jobs should use `batch_mode=False`
+  and reserve batch mode for jobs where the 50% discount matters more
+  than wall-clock latency. README's "Features" bullet updated to call
+  this out explicitly.
+
 ## [1.6.2] - 2026-06-03
 
 ### Fixed

@@ -213,12 +213,17 @@ def _build_jsonl_line(provider: str, custom_id: str, payload: dict, model: str) 
             "body": payload,
         }
     elif provider == "xai":
-        # xAI requests are added one-by-one after batch creation; same OpenAI-compat format
+        # xAI batch API uses a tagged-union envelope: each request element
+        # has `batch_request_id` + `batch_request` (an object with one key
+        # naming the endpoint variant: `chat_get_completion`, `responses`,
+        # `image_generation`, etc.). For chat classification the variant is
+        # `chat_get_completion` and the payload inside it is the standard
+        # chat-completion body (model + messages + …).
         return {
-            "custom_id": custom_id,
-            "method": "POST",
-            "url": "/v1/chat/completions",
-            "body": payload,
+            "batch_request_id": custom_id,
+            "batch_request": {
+                "chat_get_completion": payload,
+            },
         }
     raise ValueError(f"Unsupported batch provider: {provider}")
 
@@ -369,16 +374,25 @@ def _create_batch_job(
         return resp.json()["id"]
 
     elif provider == "xai":
-        # Step 1: Create empty batch
+        # Step 1: Create empty batch. xAI requires a `name` field on create;
+        # the older `completion_window` field was removed. Response key is
+        # `batch_id`, not `id`.
+        import time as _time
         url = BATCH_ENDPOINTS["xai"]["create"]
-        body = {"completion_window": "24h"}
+        body = {"name": f"catstack-{_time.strftime('%Y%m%d-%H%M%S')}"}
         resp = requests.post(url, headers=headers, json=body, timeout=60)
         resp.raise_for_status()
-        job_id = resp.json()["id"]
+        job_id = resp.json()["batch_id"]
 
-        # Step 2: Add all requests to the batch
+        # Step 2: Add all requests to the batch. xAI wraps the list under a
+        # `batch_requests` key; each element is the tagged-union envelope
+        # built in `_build_jsonl_line`.
         add_url = BATCH_ENDPOINTS["xai"]["add"].format(job_id=job_id)
-        add_resp = requests.post(add_url, headers=headers, json=requests_list, timeout=120)
+        add_resp = requests.post(
+            add_url, headers=headers,
+            json={"batch_requests": requests_list},
+            timeout=120,
+        )
         add_resp.raise_for_status()
         return job_id
 
@@ -479,11 +493,30 @@ def _poll_batch_job(
                 f"total={status_data.get('total_requests', '?')}"
             )
         elif provider == "xai":
-            state = status_data.get("status", "")
-            counts = status_data.get("request_counts", {})
+            # xAI returns a `state` *object* with num_* counters, not a
+            # top-level state string. Synthesize a state string compatible
+            # with the existing terminal/success-set logic:
+            #   num_pending > 0                                   → "running"
+            #   num_pending == 0, all errored/cancelled, no success → "failed"/"cancelled"
+            #   num_pending == 0, at least one success            → "completed"
+            state_obj = status_data.get("state", {})
+            num_pending = state_obj.get("num_pending", 1)
+            num_success = state_obj.get("num_success", 0)
+            num_error = state_obj.get("num_error", 0)
+            num_cancelled = state_obj.get("num_cancelled", 0)
+            if num_pending > 0:
+                state = "running"
+            elif num_success > 0:
+                state = "completed"
+            elif num_cancelled > 0 and num_error == 0:
+                state = "cancelled"
+            elif num_error > 0:
+                state = "failed"
+            else:
+                state = "completed"  # all zeros — empty batch
             progress_str = (
-                f"completed={counts.get('completed', '?')} "
-                f"failed={counts.get('failed', '?')}"
+                f"completed={num_success} failed={num_error} "
+                f"pending={num_pending} cancelled={num_cancelled}"
             )
         else:
             state = ""
@@ -590,12 +623,26 @@ def _download_batch_results(
         return resp.text
 
     elif provider == "xai":
+        # xAI's results endpoint returns paginated JSON ({results: [...],
+        # pagination_token: <str or null>}) rather than streaming JSONL.
+        # Walk all pages, concatenate the result objects, then re-serialize
+        # as JSONL so the existing line-by-line parser in
+        # `_parse_batch_results` can consume them unchanged.
         url = BATCH_ENDPOINTS["xai"]["results"].format(job_id=job_id)
         headers_dl = dict(headers)
         headers_dl.pop("Content-Type", None)
-        resp = requests.get(url, headers=headers_dl, timeout=120)
-        resp.raise_for_status()
-        return resp.text
+        all_results = []
+        pagination_token = None
+        while True:
+            params = {"pagination_token": pagination_token} if pagination_token else None
+            resp = requests.get(url, headers=headers_dl, params=params, timeout=120)
+            resp.raise_for_status()
+            data = resp.json()
+            all_results.extend(data.get("results", []) or [])
+            pagination_token = data.get("pagination_token")
+            if not pagination_token:
+                break
+        return "\n".join(json.dumps(r) for r in all_results)
 
     raise ValueError(f"Unsupported batch provider: {provider}")
 
@@ -689,9 +736,16 @@ def _parse_batch_results(
             raw_text = client._parse_response(response_body)
 
         elif provider == "xai":
-            custom_id = data.get("custom_id")
-            response_body = data.get("response", {}).get("body")
-            error_val = data.get("response", {}).get("error")
+            # xAI result envelope:
+            #   { batch_request_id, batch_result: { response: { chat_get_completion: {…} } } }
+            # `chat_get_completion` is the OpenAI-style chat-completion body
+            # that client._parse_response() already handles. Failure case has
+            # `error_message` at the top level.
+            custom_id = data.get("batch_request_id")
+            error_val = data.get("error_message")
+            batch_result = data.get("batch_result", {}) or {}
+            response_obj = batch_result.get("response", {}) or {}
+            response_body = response_obj.get("chat_get_completion")
             if error_val or response_body is None:
                 error_msg = str(error_val) if error_val else "No response body"
                 idx = custom_id_map.get(custom_id)

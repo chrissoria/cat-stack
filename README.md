@@ -139,7 +139,16 @@ All providers use the same `(model_name, provider, api_key)` tuple format. Provi
 
 - **Automatic prompt optimization** (`prompt_tune`) — correct a small sample in a browser UI, and the system generates per-category instructions that improve accuracy
 - **Multi-model ensemble** with consensus voting and agreement scores
-- **Batch API support** for OpenAI, Anthropic, Google, Mistral, and xAI
+- **Batch API support** for OpenAI, Anthropic, Google, Mistral, and xAI.
+  *Caveat for Google (Gemini):* as of 2026-06, Google's batch
+  scheduler routinely leaves small jobs (under a few dozen rows) in
+  `BATCH_STATE_PENDING` for 30+ minutes — sometimes hours — before
+  it starts processing. Google's published SLA is up to 24h. If your
+  job is small and you want results back quickly, use `batch_mode=False`
+  for Gemini; reserve `batch_mode=True` for large jobs where the
+  50% cost discount matters more than wall-clock latency. Other
+  providers' batch APIs (OpenAI, Anthropic, xAI) typically complete
+  small jobs in 1-3 minutes
 - **Prompt strategies**: Chain-of-Thought, Chain-of-Verification, step-back prompting, few-shot examples
 - **Text, image, and PDF** input auto-detection (PDF inputs are
   validated against the `%PDF-` magic-byte header before reaching
