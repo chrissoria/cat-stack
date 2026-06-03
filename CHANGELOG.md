@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Image directory loading is now case-insensitive.** `glob.glob('*.jpg')`
+  is case-sensitive on every platform — directories with mixed-case
+  extensions (e.g., `IMG_001.JPG` from many phone cameras, or
+  `Photo.Jpeg`) silently dropped files. Replaced the three duplicate
+  inline `glob.glob` loops (in `_load_image_files`, `image_features`,
+  and `image_score_drawing`) with a single shared `_load_image_files`
+  implementation backed by `pathlib.Path.iterdir()` + `suffix.lower()`
+  matching. The consolidation also fixes a separate bug in the
+  inline loops: passing a single image path (not a directory) to
+  `image_features` or `image_score_drawing` silently returned an
+  empty list, because the inline glob only handled the directory case.
+  Both functions now correctly handle list/single-file/directory inputs.
+- **Large images now warn before the b64+API round-trip.** `_encode_image`
+  prints a one-time warning (per path) when a file exceeds 20 MB —
+  most provider limits cluster between 5–20 MB (Anthropic 5, Google 7,
+  OpenAI 20) and a 50 MB upload silently fails at API time after a
+  noticeable encoding delay. Just a heads-up — encoding still proceeds.
 - **A single chunk's exception no longer kills parallel category
   exploration.** `explore_common_categories(..., max_workers>1)` used
   `pass_idx, div_idx, reply, error = future.result()` with no try/except

@@ -20,31 +20,38 @@ from .calls.image_CoVe import (
 )
 
 
-def _load_image_files(image_input):
-    """Load image files from directory path, single file path, or return list as-is."""
-    import os
-    import glob
+_IMAGE_EXTENSIONS = frozenset({
+    ".png", ".jpg", ".jpeg",
+    ".gif", ".webp", ".svg", ".svgz", ".avif", ".apng",
+    ".tif", ".tiff", ".bmp",
+    ".heif", ".heic", ".ico",
+    ".psd",
+})
 
-    image_extensions = [
-        '*.png', '*.jpg', '*.jpeg',
-        '*.gif', '*.webp', '*.svg', '*.svgz', '*.avif', '*.apng',
-        '*.tif', '*.tiff', '*.bmp',
-        '*.heif', '*.heic', '*.ico',
-        '*.psd'
-    ]
+
+def _load_image_files(image_input):
+    """Load image files from directory path, single file path, or return list as-is.
+
+    Directory matching is case-insensitive — `glob.glob('*.jpg')` is
+    case-sensitive on every platform, so e.g. `IMG_001.JPG` (uppercase
+    extension, common from many phone cameras) was silently dropped
+    before. Now we iterate the directory and compare `suffix.lower()`
+    against the allowed-extension set.
+    """
+    import os
+    from pathlib import Path
 
     if isinstance(image_input, list):
         image_files = image_input
         print(f"Provided a list of {len(image_input)} images.")
     elif os.path.isfile(image_input):
-        # Single file path
         image_files = [image_input]
         print(f"Provided 1 image file.")
     elif os.path.isdir(image_input):
-        # Directory path - glob for images
-        image_files = []
-        for ext in image_extensions:
-            image_files.extend(glob.glob(os.path.join(image_input, ext)))
+        image_files = sorted(
+            str(p) for p in Path(image_input).iterdir()
+            if p.is_file() and p.suffix.lower() in _IMAGE_EXTENSIONS
+        )
         print(f"Found {len(image_files)} images in directory.")
     else:
         raise FileNotFoundError(f"Image input not found: {image_input}")
@@ -52,8 +59,18 @@ def _load_image_files(image_input):
     return image_files
 
 
+_LARGE_IMAGE_BYTES = 20 * 1024 * 1024  # 20 MB — most provider hard limits cluster between 5–20 MB
+_warned_large_images = set()
+
+
 def _encode_image(img_path):
-    """Encode an image file to base64. Returns (encoded_data, extension, is_valid)."""
+    """Encode an image file to base64. Returns (encoded_data, extension, is_valid).
+
+    Prints a one-time warning per path when the file is over
+    `_LARGE_IMAGE_BYTES` — most provider limits cluster between 5–20 MB
+    (Anthropic 5 MB, OpenAI 20 MB, Google 7 MB) and a 50 MB upload
+    silently fails at API time after the b64 round-trip cost.
+    """
     import os
     import base64
     from pathlib import Path
@@ -65,6 +82,13 @@ def _encode_image(img_path):
         return None, None, False
 
     try:
+        size = os.path.getsize(img_path)
+        if size > _LARGE_IMAGE_BYTES and img_path not in _warned_large_images:
+            _warned_large_images.add(img_path)
+            print(
+                f"[CatLLM] Warning: '{img_path}' is {size / 1024 / 1024:.1f} MB. "
+                f"Provider limits typically cap at 5–20 MB; this may be rejected at API time."
+            )
         with open(img_path, "rb") as f:
             encoded = base64.b64encode(f.read()).decode("utf-8")
         ext = Path(img_path).suffix.lstrip(".").lower()
@@ -804,27 +828,12 @@ def image_score_drawing(
     # Directory doesn't exist - raise an exception to halt execution
         raise FileNotFoundError(f"Directory {save_directory} doesn't exist")
 
-    image_extensions = [
-    '*.png', '*.jpg', '*.jpeg',
-    '*.gif', '*.webp', '*.svg', '*.svgz', '*.avif', '*.apng',
-    '*.tif', '*.tiff', '*.bmp',
-    '*.heif', '*.heic', '*.ico',
-    '*.psd'
-    ]
-
     model_source = model_source.lower() # eliminating case sensitivity
 
-    if not isinstance(image_input, list):
-        # If image_input is a filepath (string)
-        image_files = []
-        for ext in image_extensions:
-            image_files.extend(glob.glob(os.path.join(image_input, ext)))
-
-        print(f"Found {len(image_files)} images.")
-    else:
-        # If image_files is already a list
-        image_files = image_input
-        print(f"Provided a list of {len(image_input)} images.")
+    # Use the shared loader: handles list, single file, and directory
+    # consistently (case-insensitive) instead of the previous inline
+    # case-sensitive glob that also silently returned [] for single-file paths.
+    image_files = _load_image_files(image_input)
 
     ref_encoded, ref_ext, ref_valid = _encode_image(reference_image)
     if not ref_valid:
@@ -1109,27 +1118,12 @@ def image_features(
     import base64
     from pathlib import Path
 
-    image_extensions = [
-    '*.png', '*.jpg', '*.jpeg',
-    '*.gif', '*.webp', '*.svg', '*.svgz', '*.avif', '*.apng',
-    '*.tif', '*.tiff', '*.bmp',
-    '*.heif', '*.heic', '*.ico',
-    '*.psd'
-    ]
-
     model_source = model_source.lower() # eliminating case sensitivity
 
-    if not isinstance(image_input, list):
-        # If image_input is a filepath (string)
-        image_files = []
-        for ext in image_extensions:
-            image_files.extend(glob.glob(os.path.join(image_input, ext)))
-
-        print(f"Found {len(image_files)} images.")
-    else:
-        # If image_files is already a list
-        image_files = image_input
-        print(f"Provided a list of {len(image_input)} images.")
+    # Use the shared loader: handles list, single file, and directory
+    # consistently (case-insensitive) instead of the previous inline
+    # case-sensitive glob that also silently returned [] for single-file paths.
+    image_files = _load_image_files(image_input)
 
     categories_str = "\n".join(f"{i + 1}. {cat}" for i, cat in enumerate(features_to_extract))
     cat_num = len(features_to_extract)
