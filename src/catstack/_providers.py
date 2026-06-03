@@ -207,7 +207,7 @@ class UnifiedLLMClient:
     """A unified client for calling various LLM providers via HTTP."""
 
     def __init__(self, provider: str, api_key: str, model: str):
-        self.provider = provider.lower()
+        self.provider = _normalize_provider(provider)
         self.api_key = api_key
         self.model = model
 
@@ -723,68 +723,105 @@ class UnifiedLLMClient:
 # Provider Detection
 # =============================================================================
 
-def _detect_model_source(user_model, model_source):
-    """Auto-detect model source from model name if not explicitly provided."""
-    model_source = model_source.lower()
+def _normalize_provider(provider) -> str:
+    """Normalize a provider name. `local` is an alias for `ollama` —
+    friendlier wording for users running local inference who don't think
+    of it as "the Ollama provider"."""
+    if not provider:
+        return provider
+    p = provider.lower()
+    if p == "local":
+        return "ollama"
+    return p
 
-    # Explicit provider pass-through (no auto-detection needed)
-    if model_source == "claude-code":
-        return "claude-code"
 
-    if model_source is None or model_source == "auto":
-        user_model_lower = user_model.lower()
+# Token-based provider detection. We tokenize the model name on `-`, `_`,
+# `.` so each family name lives in its own slot — that removes the bare
+# substring leakage that bit pre-fix code (e.g. `qwen-o3-coder` matching
+# "o3" before "qwen" and routing the user's HF API key to OpenAI's
+# endpoint). First match across (token order × family-prefix order) wins.
+_FAMILY_PREFIXES = (
+    ("gpt", "openai"),
+    ("claude", "anthropic"),
+    ("gemini", "google"),
+    ("gemma", "google"),
+    ("mistral", "mistral"),
+    ("mixtral", "mistral"),
+    ("grok", "xai"),
+    ("sonar", "perplexity"),
+    ("pplx", "perplexity"),
+    ("llama", "huggingface"),
+    ("deepseek", "huggingface"),
+    ("qwen", "huggingface"),
+)
 
-        if "gpt" in user_model_lower:
-            return "openai"
-        elif "claude" in user_model_lower:
-            return "anthropic"
-        elif "gemini" in user_model_lower or "gemma" in user_model_lower:
-            return "google"
-        elif "llama" in user_model_lower or "meta" in user_model_lower:
-            return "huggingface"
-        elif "mistral" in user_model_lower or "mixtral" in user_model_lower:
-            return "mistral"
-        elif "sonar" in user_model_lower or "pplx" in user_model_lower:
-            return "perplexity"
-        elif "deepseek" in user_model_lower or "qwen" in user_model_lower:
-            return "huggingface"
-        elif "grok" in user_model_lower:
-            return "xai"
-        else:
-            raise ValueError(
-                f"Could not auto-detect model source from '{user_model}'. "
-                "Please specify model_source explicitly: OpenAI, Anthropic, Perplexity, Google, xAI, Huggingface, or Mistral"
-            )
-    return model_source
+# OpenAI o-series models. Must be the FIRST token in the model name —
+# guards against `qwen-o3-coder` style strings where `o3` appears
+# downstream and isn't actually an o-series model.
+_O_SERIES_TOKENS = frozenset({f"o{n}" for n in range(1, 10)})
 
 
 def detect_provider(model_name: str, provider: str = "auto") -> str:
-    """Auto-detect provider from model name if not explicitly provided."""
+    """Auto-detect provider from model name if not explicitly provided.
+
+    Routing rules, in order:
+      1. `provider != "auto"` → use it (`local` normalised to `ollama`).
+      2. Model name contains `/` → HuggingFace (`org/model[:router]` format).
+      3. Model name contains `:` (no `/`) → looks like Ollama tag syntax;
+         raise ValueError. Ollama is intentionally never auto-detected — too
+         easy to misroute to local inference when the user meant a hosted
+         provider, and the failure mode (connection refused on port 11434)
+         is confusing. Set `provider='local'` (or `'ollama'`) explicitly.
+      4. Tokenize on `-`, `_`, `.`. First token in `_O_SERIES_TOKENS`
+         (`o1`, …, `o9`) → openai. Otherwise, the first token-prefix
+         match against `_FAMILY_PREFIXES` wins.
+      5. No match → ValueError asking for explicit `provider=`.
+    """
     if provider and provider.lower() != "auto":
-        return provider.lower()
+        return _normalize_provider(provider)
 
-    model_lower = model_name.lower()
+    name_lower = model_name.lower()
 
-    if "gpt" in model_lower or "o1" in model_lower or "o3" in model_lower:
-        return "openai"
-    elif "claude" in model_lower:
-        return "anthropic"
-    elif "gemini" in model_lower or "gemma" in model_lower:
-        return "google"
-    elif "mistral" in model_lower or "mixtral" in model_lower:
-        return "mistral"
-    elif "sonar" in model_lower or "pplx" in model_lower:
-        return "perplexity"
-    elif "grok" in model_lower:
-        return "xai"
-    elif "llama" in model_lower or "meta" in model_lower or "deepseek" in model_lower or "qwen" in model_lower:
+    if "/" in name_lower:
         return "huggingface"
-    else:
+
+    if ":" in name_lower:
+        raise ValueError(
+            f"Model '{model_name}' looks like Ollama tag syntax (`name:tag`). "
+            "Auto-detection is intentionally disabled for Ollama models — "
+            "set provider='local' (or provider='ollama') explicitly to use "
+            "local Ollama inference."
+        )
+
+    tokens = [t for t in name_lower.replace("_", "-").replace(".", "-").split("-") if t]
+    if not tokens:
         raise ValueError(
             f"Could not auto-detect provider from '{model_name}'. "
-            "Please specify provider explicitly: openai, anthropic, google, mistral, "
-            "perplexity, xai, huggingface, or ollama."
+            "Please specify provider explicitly."
         )
+
+    if tokens[0] in _O_SERIES_TOKENS:
+        return "openai"
+
+    for token in tokens:
+        for prefix, prov in _FAMILY_PREFIXES:
+            if token.startswith(prefix):
+                return prov
+
+    raise ValueError(
+        f"Could not auto-detect provider from '{model_name}'. "
+        "Please specify provider explicitly: openai, anthropic, google, mistral, "
+        "perplexity, xai, huggingface, or ollama."
+    )
+
+
+def _detect_model_source(user_model, model_source):
+    """Back-compat shim. Delegates to `detect_provider` so both paths route
+    identically; kept because internal callers (text_functions.py et al.)
+    still use this name. Will be inlined in a future cleanup."""
+    if model_source and model_source.lower() == "claude-code":
+        return "claude-code"
+    return detect_provider(user_model, provider=model_source)
 
 
 # =============================================================================

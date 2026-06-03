@@ -5,6 +5,39 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`detect_provider` and `_detect_model_source` no longer disagree on the
+  same model string.** Pre-fix, the two near-duplicate auto-detection
+  functions used divergent substring rules (`_detect_model_source` was
+  missing the `o1`/`o3` reasoning-model patterns); empirical probe showed
+  5/20 test strings disagreed. Worst case: a user calling
+  `classify(model="o3-mini", provider="auto")` crashed through one entry
+  point with `ValueError` and worked through another. Bare-substring
+  matching also misrouted real inputs (`qwen-o3-coder` → openai because
+  `"o3"` matched before `"qwen"`, routing the user's HF API key to
+  OpenAI's endpoint). Consolidated to a single token-based matcher: the
+  model name is split on `-` / `_` / `.`, an explicit set of OpenAI
+  o-series tokens (`o1`…`o9`) is checked only as the *first* token, then
+  family-prefix matches walk the tokens in order. `_detect_model_source`
+  is now a thin shim over `detect_provider` so both paths route
+  identically. `org/model` format routes to HuggingFace unconditionally
+  (catches HF-hosted Mistral/Qwen/Llama models that previously misrouted
+  to mistral.ai). `name:tag` syntax (no slash) now raises with a
+  helpful error — auto-detection is intentionally disabled for Ollama
+  because the failure mode (connection refused on :11434) is confusing
+  for users who meant a hosted model.
+
+### Changed
+- **`provider="local"` is a recognized alias for `provider="ollama"`.**
+  Normalized at the `detect_provider` and `UnifiedLLMClient.__init__`
+  boundaries. Friendlier wording for users running local Ollama
+  inference who don't think of it as "the Ollama provider"; `"ollama"`
+  still works for back-compat.
+
+---
+
 ## [1.5.0] - 2026-06-02
 
 ### Fixed
