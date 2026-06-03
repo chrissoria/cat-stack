@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Text-mode CoVe Step 4 now requests JSON output.** `calls/CoVe.py`'s
+  four `chain_of_verification_*` functions (re-exported via
+  `cat_stack.calls.__all__` — public surface for anyone who wants to
+  invoke text CoVe directly without going through the unified-client
+  path) didn't pass any JSON-mode hint on Step 4, the final corrected
+  categorization. Downstream `extract_json()` expects JSON-shaped
+  output; without the hint, OpenAI / Mistral / Google would freely
+  return prose around the JSON object. Added per-provider JSON mode
+  to Step 4 matching the pattern already in `calls/pdf_CoVe.py` and
+  `calls/image_CoVe.py`: OpenAI and Mistral get
+  `response_format={"type": "json_object"}`, Google gets
+  `generationConfig.responseMimeType = "application/json"`. Anthropic
+  has no native JSON-mode kwarg in its messages API — its Step 4
+  stays prompt-based (also matching the existing image_CoVe.py and
+  pdf_CoVe.py anthropic variants). Steps 2 and 3 (question generation
+  and free-text Q/A) intentionally stay text-mode.
+  - *Note:* `cat-stack`'s active text-CoVe path runs through
+    `text_functions_ensemble.run_chain_of_verification` (uses
+    `UnifiedLLMClient.complete(json_schema=...)` which already gets
+    JSON mode for free), so this fix is primarily for external callers
+    who import the SDK-shaped functions directly. The kwargs were
+    added rather than deleting the file because the symbols are public
+    API.
 - **`prompt_tune()` no longer returns prompts that didn't beat baseline,
   and the meta-LLM now sees the full attempt history.** Two related
   bugs in `src/catstack/prompt_tune.py`:

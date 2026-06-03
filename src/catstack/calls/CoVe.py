@@ -48,15 +48,20 @@ def chain_of_verification_openai(
             verification_qa.append(f"Q: {question}\nA: {answer}")
         
         # STEP 4: Final corrected categorization
+        # Request strict JSON via response_format — Step 4 produces the
+        # final per-category labeling, which downstream extract_json()
+        # expects to be JSON-shaped. Matches the pattern in
+        # calls/image_CoVe.py and calls/pdf_CoVe.py for the OpenAI variant.
         verification_qa_text = "\n\n".join(verification_qa)
-        
+
         step4_filled = (step4_prompt
             .replace('<<INITIAL_REPLY>>', initial_reply)
             .replace('<<VERIFICATION_QA>>', verification_qa_text))
-        
+
         final_response = client.chat.completions.create(
             model=user_model,
             messages=[{'role': 'user', 'content': step4_filled}],
+            response_format={"type": "json_object"},
             **({"temperature": creativity} if creativity is not None else {})
         )
 
@@ -195,20 +200,28 @@ def chain_of_verification_google(
             verification_qa.append(f"Q: {question}\nA: {answer}")
         
         # STEP 4: Final corrected categorization
+        # Request strict JSON via responseMimeType — Step 4 produces the
+        # final per-category labeling, which downstream extract_json()
+        # expects to be JSON-shaped. Matches the pattern in
+        # calls/pdf_CoVe.py for the Google variant. responseMimeType
+        # belongs inside generationConfig (top-level is rejected by Gemini).
         verification_qa_text = "\n\n".join(verification_qa)
-        
+
         step4_filled = (step4_prompt
             .replace('<<PROMPT>>', prompt)
             .replace('<<INITIAL_REPLY>>', initial_reply)
             .replace('<<VERIFICATION_QA>>', verification_qa_text))
-        
+
         payload_step4 = {
             "contents": [{
                 "parts": [{"text": step4_filled}]
             }],
-            **({"generationConfig": {"temperature": creativity}} if creativity is not None else {})
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                **({"temperature": creativity} if creativity is not None else {}),
+            },
         }
-        
+
         result_step4 = make_google_request(url, headers, payload_step4)
         verified_reply = result_step4["candidates"][0]["content"]["parts"][0]["text"]
 
@@ -267,15 +280,20 @@ def chain_of_verification_mistral(
             verification_qa.append(f"Q: {question}\nA: {answer}")
         
         # STEP 4: Final corrected categorization
+        # Request strict JSON via response_format — Step 4 produces the
+        # final per-category labeling, which downstream extract_json()
+        # expects to be JSON-shaped. Matches the pattern in
+        # calls/pdf_CoVe.py for the Mistral variant.
         verification_qa_text = "\n\n".join(verification_qa)
-        
+
         step4_filled = (step4_prompt
             .replace('<<INITIAL_REPLY>>', initial_reply)
             .replace('<<VERIFICATION_QA>>', verification_qa_text))
-        
+
         final_response = client.chat.complete(
             model=user_model,
             messages=[{'role': 'user', 'content': step4_filled}],
+            response_format={"type": "json_object"},
             **({"temperature": creativity} if creativity is not None else {})
         )
         
