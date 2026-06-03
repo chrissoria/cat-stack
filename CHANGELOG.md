@@ -29,6 +29,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   because the failure mode (connection refused on :11434) is confusing
   for users who meant a hosted model.
 
+- **`UnifiedLLMClient.complete()` retry logic hardened.** Four related
+  problems addressed in one pass:
+  - **`Retry-After` headers are now honored** on both 429 and 5xx
+    responses. Accepts integer-seconds and HTTP-date forms (RFC 7231).
+    Provider's explicit retry hint takes precedence over our exponential
+    schedule.
+  - **Backoff is jittered** (full jitter, sample uniformly from
+    `[0.5 × base, 1.5 × base]`). Concurrent ensemble workers that all hit
+    a 429 at the same instant no longer wake up on the same tick. Same
+    treatment for 5xx, `requests.exceptions.Timeout`, and the catch-all
+    `RequestException`.
+  - **Hard cap on cumulative wait time per call.** If the next planned
+    sleep would push total elapsed time past `_MAX_TOTAL_WAIT_SECONDS`
+    (300s, hardcoded), the loop returns the error instead of sleeping.
+    Pre-fix worst case: 5 retries × 5× multiplier on 429s could block a
+    single call for ~310 s.
+  - **`_call_claude_cli` now catches `OSError` outside the retry loop.**
+    A multi-MB prompt that overflows the OS's `ARG_MAX` raises
+    `OSError [Errno 7] Argument list too long` from `subprocess.run`.
+    Pre-fix, that error bubbled up out of `complete()`, breaking the
+    `(text, error)` contract and crashing the caller. Now returns
+    `(None, "Claude CLI subprocess failed: ...")` after a single
+    attempt — E2BIG is deterministic for this prompt size, retrying is
+    pointless.
+
 ### Changed
 - **`provider="local"` is a recognized alias for `provider="ollama"`.**
   Normalized at the `detect_provider` and `UnifiedLLMClient.__init__`

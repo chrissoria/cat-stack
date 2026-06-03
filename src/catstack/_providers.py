@@ -7,9 +7,17 @@ without requiring provider-specific SDKs.
 """
 
 import json
+import random
 import threading
 import time
 import requests
+
+# Hard cap on total accumulated retry wait per complete() call. Prevents a
+# string of transient errors from blocking a single request indefinitely
+# (the bare exponential schedule could otherwise sit on a request for
+# 5+ minutes). Tuned to "long enough to outlast a real provider blip,
+# short enough that batch ensembles don't stall for half an hour."
+_MAX_TOTAL_WAIT_SECONDS = 300.0
 
 __all__ = [
     # Main client
@@ -570,38 +578,45 @@ class UnifiedLLMClient:
             cmd.extend(["--system-prompt", system_prompt])
         cmd.append(user_prompt)
 
-        for attempt in range(max_retries):
-            try:
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                if result.returncode == 0:
-                    return result.stdout.strip(), None
-                else:
-                    error_msg = result.stderr.strip() or f"CLI exited with code {result.returncode}"
+        try:
+            for attempt in range(max_retries):
+                try:
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                    )
+                    if result.returncode == 0:
+                        return result.stdout.strip(), None
+                    else:
+                        error_msg = result.stderr.strip() or f"CLI exited with code {result.returncode}"
+                        if attempt < max_retries - 1:
+                            wait_time = initial_delay * (2 ** attempt)
+                            print(f"Claude CLI error: {error_msg}. Retrying in {wait_time}s...")
+                            time.sleep(wait_time)
+                        else:
+                            return None, f"Claude CLI failed after {max_retries} attempts: {error_msg}"
+                except subprocess.TimeoutExpired:
                     if attempt < max_retries - 1:
                         wait_time = initial_delay * (2 ** attempt)
-                        print(f"Claude CLI error: {error_msg}. Retrying in {wait_time}s...")
+                        print(f"Claude CLI timeout. Retrying in {wait_time}s...")
                         time.sleep(wait_time)
                     else:
-                        return None, f"Claude CLI failed after {max_retries} attempts: {error_msg}"
-            except subprocess.TimeoutExpired:
-                if attempt < max_retries - 1:
-                    wait_time = initial_delay * (2 ** attempt)
-                    print(f"Claude CLI timeout. Retrying in {wait_time}s...")
-                    time.sleep(wait_time)
-                else:
-                    return None, "Claude CLI timeout after retries"
-            except FileNotFoundError:
-                return None, (
-                    "Claude CLI not found. Install it: "
-                    "https://docs.anthropic.com/en/docs/claude-code"
-                )
+                        return None, "Claude CLI timeout after retries"
+                except FileNotFoundError:
+                    return None, (
+                        "Claude CLI not found. Install it: "
+                        "https://docs.anthropic.com/en/docs/claude-code"
+                    )
 
-        return None, "Max retries exceeded"
+            return None, "Max retries exceeded"
+        except OSError as e:
+            # E2BIG on macOS/Linux: argv too long. Deterministic for this
+            # prompt size — no point retrying. Surface as an error rather
+            # than letting OSError bubble out and break the (text, error)
+            # contract that callers depend on.
+            return None, f"Claude CLI subprocess failed: {e} (prompt may be too large for argv)"
 
     def complete(
         self,
@@ -639,6 +654,10 @@ class UnifiedLLMClient:
         headers = self._get_headers()
         payload = self._build_payload(messages, json_schema, creativity, thinking_budget=thinking_budget, force_json=force_json)
 
+        # Track cumulative wait so a long string of transient errors can't
+        # block the call indefinitely. See _MAX_TOTAL_WAIT_SECONDS.
+        start = time.monotonic()
+
         for attempt in range(max_retries):
             endpoint = self._get_endpoint()
             try:
@@ -674,19 +693,28 @@ class UnifiedLLMClient:
                 elif response.status_code in [401, 403]:
                     return None, f"Authentication failed for {self.provider}"
                 elif response.status_code == 429:
-                    # Rate limited - retry with backoff
-                    if attempt < max_retries - 1:
-                        wait_time = initial_delay * (2 ** attempt) * 5  # Longer wait for rate limits
-                        print(f"Rate limited. Waiting {wait_time}s...")
+                    # Rate limited. Honor Retry-After if present; otherwise
+                    # fall back to jittered exponential (5x multiplier for
+                    # rate limits — they need longer cool-down than 5xx).
+                    wait_time = _parse_retry_after(response.headers.get("Retry-After"))
+                    if wait_time is None:
+                        wait_time = _backoff_with_jitter(initial_delay, attempt, multiplier=5.0)
+                    elapsed = time.monotonic() - start
+                    if attempt < max_retries - 1 and elapsed + wait_time <= _MAX_TOTAL_WAIT_SECONDS:
+                        print(f"Rate limited. Waiting {wait_time:.1f}s...")
                         time.sleep(wait_time)
                         continue
                     else:
-                        return None, "Rate limit exceeded after retries"
+                        return None, "Rate limit exceeded (retry budget or time cap)"
                 elif response.status_code >= 500:
-                    # Server error - retry
-                    if attempt < max_retries - 1:
-                        wait_time = initial_delay * (2 ** attempt)
-                        print(f"Server error {response.status_code}. Retrying in {wait_time}s...")
+                    # Server error. Honor Retry-After if present; otherwise
+                    # jittered exponential backoff.
+                    wait_time = _parse_retry_after(response.headers.get("Retry-After"))
+                    if wait_time is None:
+                        wait_time = _backoff_with_jitter(initial_delay, attempt)
+                    elapsed = time.monotonic() - start
+                    if attempt < max_retries - 1 and elapsed + wait_time <= _MAX_TOTAL_WAIT_SECONDS:
+                        print(f"Server error {response.status_code}. Retrying in {wait_time:.1f}s...")
                         time.sleep(wait_time)
                         continue
                     else:
@@ -698,17 +726,19 @@ class UnifiedLLMClient:
                 return result, None
 
             except requests.exceptions.Timeout:
-                if attempt < max_retries - 1:
-                    wait_time = initial_delay * (2 ** attempt)
-                    print(f"Request timeout. Retrying in {wait_time}s...")
+                wait_time = _backoff_with_jitter(initial_delay, attempt)
+                elapsed = time.monotonic() - start
+                if attempt < max_retries - 1 and elapsed + wait_time <= _MAX_TOTAL_WAIT_SECONDS:
+                    print(f"Request timeout. Retrying in {wait_time:.1f}s...")
                     time.sleep(wait_time)
                 else:
                     return None, "Request timeout after retries"
 
             except requests.exceptions.RequestException as e:
-                if attempt < max_retries - 1:
-                    wait_time = initial_delay * (2 ** attempt)
-                    print(f"Request error: {e}. Retrying in {wait_time}s...")
+                wait_time = _backoff_with_jitter(initial_delay, attempt)
+                elapsed = time.monotonic() - start
+                if attempt < max_retries - 1 and elapsed + wait_time <= _MAX_TOTAL_WAIT_SECONDS:
+                    print(f"Request error: {e}. Retrying in {wait_time:.1f}s...")
                     time.sleep(wait_time)
                 else:
                     return None, f"Request failed: {e}"
@@ -722,6 +752,45 @@ class UnifiedLLMClient:
 # =============================================================================
 # Provider Detection
 # =============================================================================
+
+def _parse_retry_after(header_value):
+    """Parse a Retry-After header value into seconds, or return None if
+    the header is missing/unparseable/negative.
+
+    Accepts both forms allowed by RFC 7231:
+      - Integer seconds: `Retry-After: 30`
+      - HTTP-date:       `Retry-After: Wed, 21 Oct 2026 07:28:00 GMT`
+    """
+    if not header_value:
+        return None
+    s = str(header_value).strip()
+    try:
+        return max(0.0, float(s))
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+        from datetime import datetime, timezone
+        target = parsedate_to_datetime(s)
+        if target is None:
+            return None
+        now = datetime.now(timezone.utc)
+        return max(0.0, (target - now).total_seconds())
+    except Exception:
+        return None
+
+
+def _backoff_with_jitter(initial_delay, attempt, multiplier=1.0):
+    """Full-jitter exponential backoff. Returns a value in
+    [0.5 * base, 1.5 * base] where base = initial_delay * 2^attempt * multiplier.
+
+    Jitter prevents thundering-herd behavior when multiple concurrent
+    callers (e.g. ensemble workers) all hit a 429 at the same instant and
+    would otherwise wake at the same retry tick.
+    """
+    base = initial_delay * (2 ** attempt) * multiplier
+    return base * (0.5 + random.random())
+
 
 def _normalize_provider(provider) -> str:
     """Normalize a provider name. `local` is an alias for `ollama` —
