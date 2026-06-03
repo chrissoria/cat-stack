@@ -39,16 +39,63 @@ def _anthropic_supports_pdf(model_name):
     return False
 
 
+def _is_likely_pdf(path) -> bool:
+    """True if the first 1024 bytes of `path` contain the PDF magic bytes
+    (`%PDF-`). PyMuPDF is permissive and will happily "open" an HTML
+    file saved with .pdf extension, render a junk page, and let the
+    downstream VLM produce a "successful" classification dict from
+    blank content. The cheap fix is to refuse files that don't have
+    the canonical PDF header before they reach PyMuPDF.
+
+    Scanning 1024 bytes (rather than checking offset 0 strictly) matches
+    what most PDF parsers do — the spec technically allows leading bytes
+    before the header (e.g. MIME-wrapped PDFs).
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(1024)
+        return b"%PDF-" in head
+    except OSError:
+        return False
+
+
 def _load_pdf_files(pdf_input):
-    """Load PDF files from directory path, single file path, or return list as-is."""
+    """Load PDF files from directory path, single file path, or return list as-is.
+
+    Files are validated against the PDF magic-byte header before being
+    returned — a single bogus path raises `ValueError`; bogus files
+    found during a directory glob are skipped with a warning. This
+    prevents PyMuPDF from silently rendering non-PDF content into
+    near-blank pages that then get classified as "success" downstream.
+    """
     import os
     import glob
 
     if isinstance(pdf_input, list):
-        pdf_files = pdf_input
-        print(f"Provided a list of {len(pdf_input)} PDFs.")
+        pdf_files = []
+        for path in pdf_input:
+            if not os.path.isfile(path):
+                raise FileNotFoundError(f"PDF input not found: {path}")
+            if not _is_likely_pdf(path):
+                raise ValueError(
+                    f"File '{path}' does not have a PDF header "
+                    f"(first 1024 bytes don't contain b'%PDF-'). "
+                    f"PyMuPDF would happily render it as a junk page "
+                    f"and the VLM would classify the result as 'success' — "
+                    f"refusing instead. Check the file is a real PDF."
+                )
+            pdf_files.append(path)
+        print(f"Provided a list of {len(pdf_files)} PDFs.")
     elif os.path.isfile(pdf_input):
         # Single file path
+        if not _is_likely_pdf(pdf_input):
+            raise ValueError(
+                f"File '{pdf_input}' does not have a PDF header "
+                f"(first 1024 bytes don't contain b'%PDF-'). "
+                f"PyMuPDF would happily render it as a junk page "
+                f"and the VLM would classify the result as 'success' — "
+                f"refusing instead. Check the file is a real PDF."
+            )
         pdf_files = [pdf_input]
         print(f"Provided 1 PDF file.")
     elif os.path.isdir(pdf_input):
@@ -62,7 +109,19 @@ def _load_pdf_files(pdf_input):
             if f.lower() not in seen:
                 seen.add(f.lower())
                 unique_files.append(f)
-        pdf_files = unique_files
+        # Filter out files that don't have the PDF header (e.g. a webpage
+        # saved with .pdf extension). Warn per skipped file so the user
+        # knows what didn't make it into the run.
+        validated = []
+        for f in unique_files:
+            if _is_likely_pdf(f):
+                validated.append(f)
+            else:
+                print(
+                    f"[CatLLM] Warning: skipping '{f}' — does not have a "
+                    f"PDF header (first 1024 bytes don't contain b'%PDF-')."
+                )
+        pdf_files = validated
         print(f"Found {len(pdf_files)} PDFs in directory.")
     else:
         raise FileNotFoundError(f"PDF input not found: {pdf_input}")

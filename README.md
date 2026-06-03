@@ -141,7 +141,11 @@ All providers use the same `(model_name, provider, api_key)` tuple format. Provi
 - **Multi-model ensemble** with consensus voting and agreement scores
 - **Batch API support** for OpenAI, Anthropic, Google, Mistral, and xAI
 - **Prompt strategies**: Chain-of-Thought, Chain-of-Verification, step-back prompting, few-shot examples
-- **Text, image, and PDF** input auto-detection
+- **Text, image, and PDF** input auto-detection (PDF inputs are
+  validated against the `%PDF-` magic-byte header before reaching
+  PyMuPDF, so a webpage saved with `.pdf` extension surfaces a clear
+  `ValueError` instead of silently classifying a blank rendered page
+  as `success`)
 - **Embedding similarity** tiebreaker for ensemble consensus ties
 - **Pilot test** — validate classifications on a small sample before committing to the full run
 

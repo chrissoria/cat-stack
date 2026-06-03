@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **PDF inputs are now validated against the `%PDF-` magic-byte header.**
+  PyMuPDF is famously permissive: it will happily "open" an HTML file
+  saved with `.pdf` extension, render the result as a near-blank page,
+  and the downstream VLM will classify the blank image and return
+  `processing_status: "success"` with bogus category columns. Users
+  who accidentally saved a webpage with `.pdf` on the end got a clean
+  DataFrame of garbage classifications with no signal that the input
+  was malformed. Added `_is_likely_pdf(path)` which scans the first
+  1024 bytes for `b"%PDF-"` (matches how most PDF parsers sniff —
+  technically allows leading bytes before the header, e.g. MIME-wrapped
+  PDFs). Wired into `_load_pdf_files`:
+    - Single bogus file → raises `ValueError` naming the file and
+      explaining why we're refusing rather than letting PyMuPDF stumble
+      through it.
+    - List with a bogus entry → same `ValueError` naming the offender.
+    - Directory glob → bogus files are warned-and-skipped per-file so
+      the user sees what didn't make it into the run.
+
 ## [1.6.0] - 2026-06-03
 
 ### Fixed
