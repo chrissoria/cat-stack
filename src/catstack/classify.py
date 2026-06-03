@@ -173,7 +173,10 @@ def classify(
             - "majority": 50% agreement
             - "two-thirds": 67% agreement
             - float: Custom threshold between 0 and 1
-        survey_question (str): The survey question (used when categories="auto").
+        survey_question (str): Deprecated alias for `description`. Pass
+            `description=` instead. If provided non-empty, emits a
+            DeprecationWarning and is mirrored to `description` when
+            `description` is empty.
         use_json_schema (bool): Use JSON schema for structured output. Default True.
         max_workers (int): Max parallel workers for API calls. None = auto.
         parallel (bool): Controls concurrent vs sequential model execution.
@@ -188,6 +191,11 @@ def classify(
         batch_retries (int): Max retries for batch-level failures. Default 1.
             Note: composes multiplicatively with json_retries — a row can hit
             the LLM up to (1 + json_retries) * (1 + batch_retries) times.
+        json_retries (int): Per-row retries when the LLM returns JSON that
+            fails schema validation. On each retry, the prompt appends
+            "Respond with ONLY valid JSON, no explanation or additional
+            text." On the final attempt, the formatter fallback (if
+            enabled) fires before the row is marked failed. Default 2.
         retry_delay (float): Delay between retries in seconds. Default 1.0.
         row_delay (float): Delay in seconds between processing each row. Useful
             when multiple models share the same API provider/key to avoid rate
@@ -205,12 +213,20 @@ def classify(
             and examples (1 API call). Verbose categories with descriptions and
             examples significantly improve classification accuracy over bare
             labels. Default True. Set to False to skip.
-        json_formatter (bool): If True, use a local fine-tuned model to fix
-            malformed JSON output from classification LLMs before marking
-            responses as failed. The formatter runs only when extract_json()
+        json_formatter (bool or None): Three-state control of the local
+            JSON-repair fallback model that fixes malformed LLM output before
+            marking rows as failed. The formatter runs only when extract_json()
             produces invalid output — zero cost on the happy path. On first
             use, the model (~1GB) is downloaded from HuggingFace Hub.
-            Requires: pip install cat-llm[formatter]. Default False.
+            Requires: pip install cat-llm[formatter].
+            - True: Eagerly load + use the formatter (implicit consent for
+              the ~1.5 GB dependency install if needed).
+            - False: Disabled — malformed rows stay as failures.
+            - None (default): Auto-prompt on first malformed row. If
+              dependencies are installed, asks "Use the formatter for this
+              run? (Y/n)"; if not, asks "Download deps (~1.5 GB) and use
+              the formatter? (Y/n)". Non-TTY contexts (CI, batch scripts)
+              decline silently and print a one-time suggestion.
             Auto-enabled when two_step_classify is True (or when any model in
             `models` uses the Ollama provider).
         two_step_classify (bool): Split classification into two LLM calls:
@@ -305,6 +321,22 @@ def classify(
         ...     consensus_threshold="unanimous",  # or "majority", "two-thirds", or 0.75
         ... )
     """
+    # `description` is the canonical content-neutral way to describe the
+    # data; `survey_question` is a soft-deprecated alias kept working for
+    # legacy callers (cat-survey, pre-rename notebooks, the ecosystem
+    # docs). Mirror it into `description` if `description` wasn't set, so
+    # downstream prompt assembly only needs to look in one place.
+    if survey_question:
+        warnings.warn(
+            "`survey_question=` is deprecated in classify(); use "
+            "`description=` instead. The value will be mirrored to "
+            "`description` for now.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if not description:
+            description = survey_question
+
     # Build models list
     if models is None:
         # Single model mode - build models list from individual params
