@@ -59,6 +59,26 @@ def _openai_reasoning_effort_floor(model: str) -> str:
             return floor
     return "minimal"
 
+
+# ---------------------------------------------------------------------------
+# HuggingFace `chat_template_kwargs={"enable_thinking": False}` is the knob
+# to suppress Qwen3-family `<think>` blocks. Other model families don't
+# expose an `enable_thinking` template variable, and strict HF backends
+# (Fireworks, Groq) reject the unknown field with 400 — forcing a wasted
+# retry. Restrict injection to families that actually honor the flag.
+#
+# The runtime fallback in `complete()` (strip-on-400) stays as a safety
+# net for unexpected cases — e.g. if a Qwen variant lands on a router
+# whose validator doesn't accept the field.
+# ---------------------------------------------------------------------------
+_HF_NEEDS_ENABLE_THINKING_OFF = (
+    "Qwen/Qwen3",   # covers Qwen3, Qwen3.5, Qwen3.6, …
+)
+
+
+def _hf_model_needs_enable_thinking_off(model: str) -> bool:
+    return any(model.startswith(p) for p in _HF_NEEDS_ENABLE_THINKING_OFF)
+
 __all__ = [
     # Main client
     "UnifiedLLMClient",
@@ -449,9 +469,20 @@ class UnifiedLLMClient:
         elif creativity is not None:
             payload["temperature"] = creativity
 
-        # HuggingFace: disable thinking for models that reason by default (e.g., Qwen3)
-        # when thinking_budget is explicitly set to 0
-        if self.provider in ("huggingface", "huggingface-together") and thinking_budget is not None and thinking_budget == 0:
+        # HuggingFace: disable thinking on model families whose chat
+        # template honors `enable_thinking` (Qwen3-family). Other HF-routed
+        # models don't need the kwarg, and strict-validator backends
+        # (Fireworks, Groq) reject the unknown field outright — sending it
+        # to a non-Qwen model just buys a wasted retry. See
+        # `_hf_model_needs_enable_thinking_off()`. The runtime fallback in
+        # `complete()` still strips on 400 if a router rejects the kwarg
+        # even for a model we expected to support it.
+        if (
+            self.provider in ("huggingface", "huggingface-together")
+            and thinking_budget is not None
+            and thinking_budget == 0
+            and _hf_model_needs_enable_thinking_off(self.model)
+        ):
             payload["chat_template_kwargs"] = {"enable_thinking": False}
 
         return payload

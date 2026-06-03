@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-06-03
+
+### Fixed
+- **`chat_template_kwargs={"enable_thinking": False}` now scoped to
+  Qwen3-family models only.** The kwarg exists specifically to suppress
+  Qwen3's `<think>` blocks via its chat-template `enable_thinking`
+  variable; other HF-routed families (Kimi, Llama, Gemma, gpt-oss,
+  Mistral) don't expose that variable and never benefited from the
+  injection. Strict-validator backends (Fireworks, Groq) reject the
+  unknown field with 400 — sending it to a non-Qwen model just
+  bought a wasted retry + a stderr warning on every first call. New
+  helper `_hf_model_needs_enable_thinking_off()` in `_providers.py`
+  gates the injection by model-name prefix (`Qwen/Qwen3` matches
+  Qwen3, Qwen3.5, Qwen3.6, …). The runtime 400-fallback added in
+  1.6.1 stays as a safety net for unexpected cases — e.g. if a Qwen
+  variant lands on a router whose validator doesn't accept the field
+  even though the model needs it.
+
 ## [1.6.1] - 2026-06-03
 
 ### Fixed
