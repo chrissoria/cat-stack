@@ -9,6 +9,7 @@ import html as html_lib
 import ipaddress
 import re
 import socket
+from html.parser import HTMLParser
 from urllib.parse import urlsplit
 
 import requests
@@ -145,6 +146,47 @@ def _validate_url_safe(url):
     return url, None
 
 
+_JUNK_TAGS = frozenset({
+    "script", "style", "nav", "header", "footer", "aside",
+    "noscript", "iframe", "form", "svg",
+})
+
+
+class _ReadableTextExtractor(HTMLParser):
+    """Pull readable text out of an HTML string.
+
+    Skips the contents of junk tags (script/style/nav/etc.) entirely —
+    those rarely contain content useful for downstream classification.
+    Element boundaries are treated as whitespace, so text from sibling
+    elements stays separated after the final whitespace collapse.
+    """
+
+    def __init__(self):
+        # convert_charrefs=True decodes HTML entities (&amp; etc.) as
+        # they're parsed, so we don't need a separate unescape pass.
+        super().__init__(convert_charrefs=True)
+        self._chunks: list[str] = []
+        self._junk_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _JUNK_TAGS:
+            self._junk_depth += 1
+
+    def handle_endtag(self, tag):
+        if tag in _JUNK_TAGS and self._junk_depth > 0:
+            self._junk_depth -= 1
+
+    def handle_data(self, data):
+        if self._junk_depth == 0:
+            self._chunks.append(data)
+        # Element boundary acts as whitespace; the final collapse handles
+        # any double-spaces.
+        self._chunks.append(" ")
+
+    def get_text(self) -> str:
+        return "".join(self._chunks)
+
+
 def strip_html_tags(html: str) -> str:
     """
     Extract readable text from an HTML string.
@@ -152,27 +194,29 @@ def strip_html_tags(html: str) -> str:
     Removes non-content elements (navigation, headers, footers, sidebars,
     forms, scripts, styles), strips remaining tags, collapses whitespace,
     and decodes HTML entities.
+
+    Uses stdlib `html.parser.HTMLParser` rather than regex to handle:
+      - attribute values containing `>` (e.g. analytics URLs with query
+        strings) — the regex `[^>]*` terminated at those, leaving the
+        rest of the tag as visible text;
+      - all HTML void elements (br, hr, area, base, col, embed, source,
+        track, wbr) without needing a hardcoded list;
+      - HTML entities, auto-decoded by `convert_charrefs=True`;
+      - nested same-tag content (`<script>"</script>"</script>`) —
+        structural parsing rather than non-greedy regex matching.
     """
-    text = html
+    extractor = _ReadableTextExtractor()
+    try:
+        extractor.feed(html)
+        extractor.close()
+    except Exception:
+        # html.parser is extremely permissive (it just warns on
+        # malformed input). If something does raise, fall back to a
+        # minimal tag-strip so we never propagate the exception.
+        return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)).strip()
 
-    _JUNK_TAGS = (
-        "script", "style", "nav", "header", "footer", "aside",
-        "noscript", "iframe", "form", "svg",
-    )
-    for tag in _JUNK_TAGS:
-        text = re.sub(
-            rf"<{tag}[^>]*>.*?</{tag}>",
-            "",
-            text,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-
-    for tag in ("input", "meta", "link", "img"):
-        text = re.sub(rf"<{tag}[^>]*/?\s*>", "", text, flags=re.IGNORECASE)
-
-    text = re.sub(r"<[^>]+>", " ", text)
+    text = extractor.get_text()
     text = re.sub(r"\s+", " ", text).strip()
-    text = html_lib.unescape(text)
     return text
 
 

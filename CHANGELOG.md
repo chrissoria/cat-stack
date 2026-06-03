@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`strip_html_tags` no longer leaks attribute values or misses void
+  elements.** The regex implementation had two concrete failure modes:
+  (a) `[^>]*` terminated at the first `>` even when inside a quoted
+  attribute value, so a tag like `<a href="?q=>foo">label</a>` left
+  `foo">label` as visible text — common on real pages with analytics
+  URLs and JS templating; (b) the hardcoded void-element list
+  (`input/meta/link/img`) missed `br/hr/area/base/col/embed/source/
+  track/wbr`. Replaced with a stdlib `html.parser.HTMLParser`
+  subclass (`_ReadableTextExtractor`) that tokenizes attribute
+  contents correctly and knows the full void-element set. Junk-tag
+  content (script/style/nav/header/footer/aside/noscript/iframe/form/
+  svg) is skipped by tracking depth; HTML entities are auto-decoded
+  via `convert_charrefs=True`. No new dependency — stdlib only. A
+  defensive regex fallback handles the unlikely case where the parser
+  itself raises. `cat-web` sibling re-exports `strip_html_tags` —
+  signature `(str) -> str` unchanged, no import-surface break.
+  *Known limitation:* embedded literal `</script>` inside a script
+  body still terminates parsing there — this is per HTML spec (even
+  browsers do it) and isn't something `html.parser` (or any
+  spec-compliant parser) can fix.
 - **Text-mode CoVe Step 4 now requests JSON output.** `calls/CoVe.py`'s
   four `chain_of_verification_*` functions (re-exported via
   `cat_stack.calls.__all__` — public surface for anyone who wants to
