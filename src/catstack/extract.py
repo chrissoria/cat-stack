@@ -41,8 +41,8 @@ def extract(
     input_data,
     api_key,
     input_type="auto",
-    survey_question="",
-    description=None,
+    description="",
+    survey_question=None,
     max_categories=12,
     categories_per_chunk=10,
     divisions=12,
@@ -80,9 +80,12 @@ def extract(
             - "text": Text responses
             - "image": Image files
             - "pdf": PDF documents
-        survey_question (str): The survey question or description of the text data.
-            Passed directly to explore_common_categories as survey_question.
-        description (str): Deprecated alias for survey_question. Use survey_question instead.
+        description (str): Description of the data context. Content-neutral —
+            for survey responses this is the question that was asked; for
+            documents or posts this describes what the content is about.
+        survey_question (str): Deprecated alias for `description`. Pass
+            `description=` instead. If provided, emits a DeprecationWarning
+            and is mirrored to `description` when `description` is empty.
         max_categories (int): Maximum number of final categories to return.
         categories_per_chunk (int): Categories to extract per chunk.
         divisions (int): Number of chunks to divide data into.
@@ -153,14 +156,25 @@ def extract(
         if input_type == "docx":
             input_type = "text"
 
-    # survey_question is the canonical name; description is kept for backward compatibility
-    resolved_survey_question = survey_question if survey_question else (description or "")
+    # `description` is the canonical content-neutral name. `survey_question`
+    # is a soft-deprecated alias kept working for legacy callers
+    # (notably cat-survey and pre-rename notebooks).
+    if survey_question:
+        warnings.warn(
+            "`survey_question=` is deprecated in extract(); use `description=` "
+            "instead. The value will be mirrored to `description` for now.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if not description:
+            description = survey_question
+    resolved_description = description or ""
 
     if input_type == "text":
         return explore_common_categories(
             input_data=input_data,
             api_key=api_key,
-            survey_question=resolved_survey_question,
+            survey_question=resolved_description,
             max_categories=max_categories,
             categories_per_chunk=categories_per_chunk,
             divisions=divisions,
@@ -183,7 +197,7 @@ def extract(
         return explore_image_categories(
             image_input=input_data,
             api_key=api_key,
-            image_description=resolved_survey_question,
+            image_description=resolved_description,
             max_categories=max_categories,
             categories_per_chunk=categories_per_chunk,
             divisions=divisions,
@@ -203,7 +217,7 @@ def extract(
         return explore_pdf_categories(
             pdf_input=input_data,
             api_key=api_key,
-            pdf_description=resolved_survey_question,
+            pdf_description=resolved_description,
             max_categories=max_categories,
             categories_per_chunk=categories_per_chunk,
             divisions=divisions,

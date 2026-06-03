@@ -47,7 +47,9 @@ def explore(
     Args:
         input_data: List of text responses or pandas Series.
         api_key (str): API key for the model provider.
-        description (str): The survey question or description of the data.
+        description (str): Description of the data context. Content-neutral —
+            for survey responses this is the question that was asked; for
+            documents or posts this describes what the content is about.
         max_categories (int): Maximum categories per chunk (passed through).
         categories_per_chunk (int): Categories to extract per chunk.
         divisions (int): Number of chunks to divide data into.
