@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **PDF summary synthesis now grounds on actual page text, not the page
+  label.** `summarize(input_data=<pdfs>, models=[...multiple...])` runs
+  per-model summarization then calls `_synthesize_summaries()` to merge
+  the per-model results into a consensus summary. The synthesizer's
+  prompt frames the merge as "resolve any contradictions by focusing
+  on accuracy" — anchored on an "Original text:" block. For PDF rows
+  that block was just the page label (e.g., `"report.pdf p1"`) instead
+  of the page's actual extracted text — the synthesizer had nothing to
+  check against, so contradictions between per-model summaries got
+  resolved arbitrarily. Captured the OCR-extracted page text on the
+  result_entry as a new `page_text` field during the summarize loop
+  (only when text-mode OCR ran), then read it back at synthesis time
+  with `entry.get("page_text") or page_label`. Visual-mode PDFs (no
+  OCR) fall back to page_label so synthesis still works — no
+  regression. `summarize(batch_mode=True)` is already documented as
+  incompatible with PDF input, so the parallel batch path didn't need
+  the fix.
 - **Google preflight 400 no longer fires on `additionalProperties`.**
   The preflight probe in `classify_ensemble` sends a JSON schema with
   `additionalProperties: false` (valid JSON Schema, helpful for

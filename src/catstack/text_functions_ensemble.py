@@ -4279,6 +4279,13 @@ def summarize_ensemble(
 
     for idx, item in enumerate(tqdm(items_to_process, desc=progress_desc)):
         original_item = item  # preserve for metadata extraction
+        # When a PDF item goes through text-mode OCR, save the extracted
+        # text so the per-model synthesis step (_synthesize_summaries) can
+        # ground its consensus on the actual page content, not just the
+        # page label. None when item isn't a PDF or no text was extracted
+        # (visual-mode PDFs); synthesis falls back to page_label in those
+        # cases.
+        extracted_page_text: str | None = None
 
         # OCR pre-processing: extract text from images/PDFs before summarizing
         if needs_ocr:
@@ -4326,6 +4333,11 @@ def summarize_ensemble(
 
             if ocr_text is not None:
                 item = ocr_text
+                # Only PDF items use this in synthesis; image items have
+                # their own metadata flow and synthesis already gets the
+                # OCR'd text via input_data for non-PDF cases.
+                if is_pdf_mode and isinstance(original_item, tuple) and len(original_item) == 3:
+                    extracted_page_text = ocr_text
 
         item_results = {}
         item_errors = {}
@@ -4358,6 +4370,7 @@ def summarize_ensemble(
             "input_data": original_item,
             "model_results": item_results,
             "errors": item_errors,
+            "page_text": extracted_page_text,
         }
         all_results.append(result_entry)
 
@@ -4423,7 +4436,10 @@ def summarize_ensemble(
                 "pdf_path": pdf_path,
                 "page_index": page_index,
             }
-            original_text_for_synthesis = page_label  # Use page label for synthesis context
+            # Prefer the OCR'd page text captured during summarization (text-mode PDFs).
+            # Visual-mode PDFs have no extracted text — fall back to the page label so
+            # synthesis still has *something* to anchor on (prior behavior).
+            original_text_for_synthesis = entry.get("page_text") or page_label
         else:
             # Truncate input_data for readability; add input_index for joining
             clean = " ".join(str(item).split())  # collapse whitespace/newlines
