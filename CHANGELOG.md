@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-06-03
+
 ### Fixed
 - **`consensus_threshold="majority"` now uses strict majority — ties
   resolve to "0", not "1".** *(BEHAVIOR CHANGE — listed in
