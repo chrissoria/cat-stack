@@ -447,3 +447,156 @@ class TestPromptTuneIntegration:
         assert "iterations" in result
         # At minimum we have baseline + attempts
         assert len(result["iterations"]) >= 2
+
+
+class TestNoImprovementReturnsEmpty:
+    """Task #38 (M-PROMPT-TUNE): if no iteration ever beats the baseline,
+    return system_prompt="" rather than the latest current_prompt.
+
+    Pre-fix, the L479-480 fallback promoted current_prompt to best_prompt
+    whenever best_prompt was empty — but current_prompt could contain
+    "no_change" instructions that survived without actually improving
+    the score. The docstring promises "the optimized system prompt
+    (best found)"; returning a non-improving prompt violates that.
+    """
+
+    @patch("cat_stack.prompt_tune._generate_category_instruction")
+    @patch("cat_stack.prompt_tune._classify_and_score")
+    @patch("cat_stack.prompt_tune.collect_corrections")
+    def test_no_change_outcome_returns_empty_system_prompt(
+        self, mock_collect, mock_score, mock_gen_instr
+    ):
+        """All attempts produce no_change outcomes (same score as baseline) →
+        result["system_prompt"] should be "" so the caller knows to keep
+        the baseline behavior."""
+        baseline_result = {
+            "corrections": CORRECTIONS_WITH_ERRORS,
+            "metrics": {"accuracy": 0.6, "sensitivity": 0.6, "precision": 0.6},
+            "total_flips": 2,
+            "sample_indices": [0, 1, 2, 3, 4],
+        }
+        mock_collect.return_value = baseline_result
+
+        # Every iteration produces the exact same metrics as baseline → no_change
+        mock_score.return_value = {
+            "corrections": CORRECTIONS_WITH_ERRORS,
+            "metrics": {"accuracy": 0.6, "sensitivity": 0.6, "precision": 0.6},
+            "total_flips": 2,
+            "sample_indices": [0, 1, 2, 3, 4],
+        }
+        mock_gen_instr.return_value = "Some instruction that doesn't help."
+
+        result = prompt_tune(
+            input_data=["a", "b", "c", "d", "e"],
+            categories=CATEGORIES,
+            api_key="fake-key",
+            sample_size=5,
+            max_iterations=2,
+            ui="terminal",
+            add_other=False,
+        )
+
+        # Key assertion: no improvement → empty system_prompt
+        assert result["system_prompt"] == "", (
+            "no_change outcomes don't improve baseline; system_prompt should "
+            f"be empty, got: {result['system_prompt']!r}"
+        )
+
+    @patch("cat_stack.prompt_tune._generate_category_instruction")
+    @patch("cat_stack.prompt_tune._classify_and_score")
+    @patch("cat_stack.prompt_tune.collect_corrections")
+    def test_improvement_is_still_returned(
+        self, mock_collect, mock_score, mock_gen_instr
+    ):
+        """Sanity: the fix doesn't break the happy path. When an iteration
+        DOES improve, that improved prompt is returned (matches behavior of
+        existing test_full_flow_improvement)."""
+        baseline_result = {
+            "corrections": CORRECTIONS_WITH_ERRORS,
+            "metrics": {"accuracy": 0.6, "sensitivity": 0.6, "precision": 0.6},
+            "total_flips": 2,
+            "sample_indices": [0, 1, 2, 3, 4],
+        }
+        mock_collect.return_value = baseline_result
+
+        mock_score.return_value = {
+            "corrections": CORRECTIONS_FIXED,
+            "metrics": {"accuracy": 1.0, "sensitivity": 1.0, "precision": 1.0},
+            "total_flips": 0,
+            "sample_indices": [0, 1, 2, 3, 4],
+        }
+        mock_gen_instr.return_value = "Be more accurate."
+
+        result = prompt_tune(
+            input_data=["a", "b", "c", "d", "e"],
+            categories=CATEGORIES,
+            api_key="fake-key",
+            sample_size=5,
+            max_iterations=3,
+            ui="terminal",
+            add_other=False,
+        )
+
+        # Improvement happened → non-empty prompt
+        assert result["system_prompt"] != ""
+        assert "Be more accurate" in result["system_prompt"]
+
+
+class TestHistoryWindowExpansion:
+    """Task #38 (M-PROMPT-TUNE) part 2: attempt_history is no longer capped
+    at the last 3 entries. With tune_iterations>3, the meta-LLM was
+    blind to early attempts and could re-propose duds it had already
+    tried. Now ALL history is included in the meta-prompt."""
+
+    def test_full_history_included_in_meta_prompt(self):
+        """Direct test on _generate_category_instruction: pass 5 prior
+        attempts and verify all 5 instructions appear in the meta-prompt
+        sent to the LLM (pre-fix only the last 3 would have appeared)."""
+        from cat_stack.prompt_tune import _generate_category_instruction
+
+        five_attempts = [
+            {"instruction": "Instruction zero (oldest)", "outcome": "no_change",
+             "score_before": 0.6, "score_after": 0.6},
+            {"instruction": "Instruction one", "outcome": "regressed",
+             "score_before": 0.6, "score_after": 0.5},
+            {"instruction": "Instruction two", "outcome": "no_change",
+             "score_before": 0.6, "score_after": 0.6},
+            {"instruction": "Instruction three", "outcome": "regressed",
+             "score_before": 0.6, "score_after": 0.5},
+            {"instruction": "Instruction four (most recent)", "outcome": "no_change",
+             "score_before": 0.6, "score_after": 0.6},
+        ]
+
+        with patch("cat_stack.prompt_tune.UnifiedLLMClient") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.complete.return_value = ("New instruction.", None)
+            mock_client_cls.return_value = mock_client
+
+            per_cat = _compute_per_category_metrics(CORRECTIONS_WITH_ERRORS, CATEGORIES)
+            _generate_category_instruction(
+                target_category="Positive",
+                corrections=CORRECTIONS_WITH_ERRORS,
+                categories=CATEGORIES,
+                per_cat=per_cat,
+                current_instruction="",
+                description="",
+                survey_question="",
+                multi_label=True,
+                optimize="balanced",
+                meta_model="gpt-4o",
+                meta_source="openai",
+                meta_key="fake",
+                max_retries=1,
+                attempt_history=five_attempts,
+            )
+
+            sent_prompt = mock_client.complete.call_args.kwargs["messages"][0]["content"]
+
+        # All five instructions should appear — pre-fix the oldest two were dropped
+        assert "Instruction zero (oldest)" in sent_prompt, (
+            "expanded history window should include the oldest attempt"
+        )
+        assert "Instruction one" in sent_prompt
+        assert "Instruction two" in sent_prompt
+        assert "Instruction three" in sent_prompt
+        assert "Instruction four (most recent)" in sent_prompt

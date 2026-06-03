@@ -15,6 +15,7 @@ at the per-category level:
 Categories are never modified — only the system prompt changes.
 """
 
+import warnings
 from typing import Union
 
 from ._category_analysis import has_other_category
@@ -126,8 +127,13 @@ def prompt_tune(
         model_source (str): Provider. Default "auto".
         models (list): For multi-model mode, list of (model, provider, api_key)
             tuples. Overrides user_model/api_key/model_source.
-        description (str): Description of the input data context.
-        survey_question (str): The survey question (provides context).
+        description (str): Description of the data context. Content-neutral —
+            for survey responses this is the question that was asked; for
+            documents or posts this describes what the content is about.
+        survey_question (str): Deprecated alias for `description`. Pass
+            `description=` instead. If provided non-empty, emits a
+            DeprecationWarning and is mirrored to `description` when
+            `description` is empty.
         sample_size (int): Number of random items to test per iteration. Default 10.
         max_iterations (int): Maximum instruction attempts per category. Each
             error category gets up to this many tries to find an instruction
@@ -180,6 +186,20 @@ def prompt_tune(
         ...     system_prompt=result["system_prompt"],
         ... )
     """
+    # `description` is the canonical content-neutral way to describe the
+    # data; `survey_question` is a soft-deprecated alias kept working for
+    # legacy callers.
+    if survey_question:
+        warnings.warn(
+            "`survey_question=` is deprecated in prompt_tune(); use "
+            "`description=` instead. The value will be mirrored to "
+            "`description` for now.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if not description:
+            description = survey_question
+
     # Build models list
     if models is None:
         models = [(user_model, model_source, api_key)]
@@ -454,10 +474,14 @@ def prompt_tune(
                 break
 
     # ── Step 3: Final validation ─────────────────────────────────────
-    # Assemble the final prompt and record it
+    # Assemble the final prompt for diagnostic display, but DO NOT
+    # promote it to best_prompt if no iteration actually improved the
+    # baseline score. Returning a prompt that "survived" (no_change
+    # outcomes don't get reverted) but didn't beat baseline was
+    # misleading — the docstring promises "the optimized system prompt
+    # (best found)". Empty string is the truthful answer when nothing
+    # improved: it tells the caller to keep baseline behavior.
     current_prompt = _assemble_prompt(cat_instructions, categories)
-    if not best_prompt and current_prompt:
-        best_prompt = current_prompt
 
     # Find the best iteration by target score
     best_iter_data = max(iterations, key=lambda it: _target_fn(it["metrics"]))
@@ -517,8 +541,11 @@ def prompt_tune(
         print(f"\n  Optimized prompt:")
         for line in best_prompt.split("\n"):
             print(f"    {line}")
+    elif total_flips == 0:
+        print(f"\n  Best prompt: (baseline already correct — no tuning needed)")
     else:
-        print(f"\n  Best prompt: (default — no custom instruction needed)")
+        print(f"\n  Best prompt: (no improvement found — keep baseline; "
+              f"returned system_prompt='')")
     print(f"{'=' * 60}\n")
 
     return {
@@ -749,14 +776,19 @@ def _generate_category_instruction(
     # Current instruction
     current_text = f'\nCURRENT INSTRUCTION FOR THIS CATEGORY:\n"{current_instruction}"\n' if current_instruction else ""
 
-    # History of previous attempts — capped at last 3 to avoid prompt bloat.
-    # Format is deliberately simple (no score numbers) so smaller models can follow it.
+    # History of previous attempts — show ALL of them. Per-category
+    # history is small (one short instruction + outcome word per entry,
+    # ~100 chars) so even 20-iteration runs stay under 2 KB, dwarfed by
+    # the multi-KB error-list section above. Format is deliberately
+    # simple (no score numbers) so smaller meta-models can follow it.
+    # Pre-fix this was capped at the last 3 entries, which meant runs
+    # with tune_iterations>3 lost early history and the meta-LLM
+    # re-proposed duds it had already seen.
     history_text = ""
     if attempt_history:
-        recent = attempt_history[-3:]
         history_lines = [
             f'  - "{h["instruction"]}" [{h["outcome"]}]'
-            for h in recent
+            for h in attempt_history
         ]
         history_text = (
             "\nPREVIOUS INSTRUCTIONS TRIED FOR THIS CATEGORY (already tested — write something different):\n"

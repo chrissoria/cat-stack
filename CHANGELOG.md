@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`prompt_tune()` no longer returns prompts that didn't beat baseline,
+  and the meta-LLM now sees the full attempt history.** Two related
+  bugs in `src/catstack/prompt_tune.py`:
+  - At L479-480 the function had a fallback `if not best_prompt and
+    current_prompt: best_prompt = current_prompt` that promoted the
+    latest assembled prompt to "best" whenever no iteration actually
+    improved the baseline score. But `current_prompt` contained any
+    "no_change" instructions that survived without improving — so the
+    function returned a prompt that demonstrably didn't beat baseline,
+    contradicting the docstring's "the optimized system prompt (best
+    found)" promise. Removed the fallback; when no improvement is
+    found, `result["system_prompt"]` is now `""` and the final-summary
+    print says *"no improvement found — keep baseline; returned
+    system_prompt=''"* (replacing the prior misleading *"no custom
+    instruction needed"*). Callers that unconditionally piped the
+    result into `classify(system_prompt=...)` are unaffected because
+    `system_prompt=""` is the default.
+  - At L772 the attempt-history window was capped at the last 3 entries
+    to "avoid prompt bloat." With default `tune_iterations=3` the cap
+    was a no-op, but users explicitly setting `tune_iterations=5+`
+    lost visibility into the first attempts and the meta-LLM
+    re-proposed duds it had already tried. Removed the cap — full
+    history is now included. Each entry is ~100 chars
+    (`"instruction" [outcome]`) so even 20-iteration runs add <2 KB to
+    a meta-prompt that already carries multi-KB error-list context.
 - **PDF summary synthesis now grounds on actual page text, not the page
   label.** `summarize(input_data=<pdfs>, models=[...multiple...])` runs
   per-model summarization then calls `_synthesize_summaries()` to merge
