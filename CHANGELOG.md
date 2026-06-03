@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Google preflight 400 no longer fires on `additionalProperties`.**
+  The preflight probe in `classify_ensemble` sends a JSON schema with
+  `additionalProperties: false` (valid JSON Schema, helpful for
+  catching malformed responses) which Gemini models reject — Google's
+  `responseSchema` only accepts a subset of OpenAPI 3.0, excluding
+  `additionalProperties`, `oneOf`/`anyOf`/`allOf`/`not`, and
+  `$schema`/`$ref`/`definitions`/`patternProperties`. Every Google
+  preflight 400'd and the warning "preflight test returned: Server
+  error 400 after retries" became a familiar startup noise — and
+  meant the actual classification calls (using the same schema) also
+  paid the 400-retry budget per row. Added a recursive
+  `_sanitize_google_schema()` that strips unsupported keys before the
+  payload reaches `responseSchema`. Google still gets the validation
+  intent (shape, required fields, types) but in a form its API
+  accepts.
 - **`parse_kwargs_string` now warns on probable typos.** When a value
   looks like the user was trying to write a Python literal (starts
   with `[ ( { " ' -` or a digit, or equals `True`/`False`/`None`) but

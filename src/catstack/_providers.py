@@ -490,7 +490,7 @@ class UnifiedLLMClient:
 
         if json_schema:
             payload["generationConfig"]["responseMimeType"] = "application/json"
-            payload["generationConfig"]["responseSchema"] = json_schema
+            payload["generationConfig"]["responseSchema"] = _sanitize_google_schema(json_schema)
         elif force_json:
             payload["generationConfig"]["responseMimeType"] = "application/json"
         # else: no mime type - allow text responses
@@ -693,6 +693,23 @@ class UnifiedLLMClient:
                             payload.pop("response_format")
                             continue  # Retry immediately without response_format
 
+                    # HF: some routers (notably Groq behind HF Inference
+                    # Providers, which serves Llama-3.x and gpt-oss) reject
+                    # `chat_template_kwargs` outright with
+                    #   "property 'chat_template_kwargs' is unsupported".
+                    # The kwarg is only there to disable thinking on Qwen3-
+                    # family models when thinking_budget=0 — dropping it on
+                    # a router that doesn't honor it is harmless. Strip and
+                    # retry, mirror the response_format pattern above.
+                    if "chat_template_kwargs" in error_text and "unsupported" in error_text:
+                        if "chat_template_kwargs" in payload:
+                            if not getattr(self, '_warned_no_chat_template_kwargs', False):
+                                print(f"\n[CatLLM] Model '{self.model}' does not accept chat_template_kwargs.")
+                                print(f"  Dropping the param and retrying. (thinking-mode control may be a no-op on this router.)\n")
+                                self._warned_no_chat_template_kwargs = True
+                            payload.pop("chat_template_kwargs")
+                            continue  # Retry immediately without chat_template_kwargs
+
                     # HuggingFace: try other routers when the current one
                     # rejects the model with a "wrong router" 400.
                     if self._is_hf_wrong_router_400(response.text):
@@ -825,6 +842,47 @@ def _backoff_with_jitter(initial_delay, attempt, multiplier=1.0):
     """
     base = initial_delay * (2 ** attempt) * multiplier
     return base * (0.5 + random.random())
+
+
+# Keys Google's responseSchema rejects (subset of OpenAPI 3.0 — strict
+# vs. full JSON Schema). Stripped recursively before send.
+# Google docs: https://ai.google.dev/api/generate-content#schema
+_GOOGLE_SCHEMA_UNSUPPORTED = frozenset({
+    "additionalProperties",  # rejected on most Gemini models
+    "$schema",
+    "$ref",
+    "$defs",
+    "definitions",
+    "oneOf",
+    "anyOf",
+    "allOf",
+    "not",
+    "patternProperties",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+})
+
+
+def _sanitize_google_schema(schema):
+    """Recursively strip keys Google's responseSchema doesn't accept.
+
+    The preflight probe sends `additionalProperties: false` which is
+    valid JSON Schema but causes a 400 on most Gemini models. Same
+    issue for `oneOf` / `anyOf` etc. when callers pass richer schemas.
+    Removing these keys produces a schema that Google accepts while
+    preserving the validation intent (Gemini's schema validation is
+    less strict by design — the model is asked to follow the shape,
+    not to formally validate).
+    """
+    if isinstance(schema, dict):
+        return {
+            k: _sanitize_google_schema(v)
+            for k, v in schema.items()
+            if k not in _GOOGLE_SCHEMA_UNSUPPORTED
+        }
+    if isinstance(schema, list):
+        return [_sanitize_google_schema(item) for item in schema]
+    return schema
 
 
 def _normalize_provider(provider) -> str:
