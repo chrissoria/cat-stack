@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.4] - 2026-06-03
+
+### Changed
+- **Rate-limit (429) and server-error (5xx) retry messages now name the
+  provider and model.** Previously cat-stack printed bare
+  `Rate limited. Waiting 13.3s...` lines, which left users guessing
+  which of the 8 providers in an ensemble was throttling them.
+  `_providers.py` now prefixes the message with `[provider/model]` —
+  e.g. `[anthropic/claude-sonnet-4-6] Rate limited. Waiting 13.3s...`
+  or `[huggingface/moonshotai/Kimi-K2.6] Server error 502. Retrying in
+  4.2s...`. Surfaced by Phase 1 of the paper port (8-model ensemble run
+  where rate-limit pauses appeared without attribution). Pure logging
+  change — no behavior difference.
+
 ## [1.6.3] - 2026-06-03
 
 ### Fixed

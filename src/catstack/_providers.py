@@ -855,7 +855,9 @@ class UnifiedLLMClient:
                         wait_time = _backoff_with_jitter(initial_delay, attempt, multiplier=5.0)
                     elapsed = time.monotonic() - start
                     if attempt < max_retries - 1 and elapsed + wait_time <= _MAX_TOTAL_WAIT_SECONDS:
-                        print(f"Rate limited. Waiting {wait_time:.1f}s...")
+                        # Name the throttling provider/model so multi-model
+                        # ensemble runs can attribute the slowdown.
+                        print(f"[{self.provider}/{self.model}] Rate limited. Waiting {wait_time:.1f}s...")
                         time.sleep(wait_time)
                         continue
                     else:
@@ -893,7 +895,9 @@ class UnifiedLLMClient:
                         wait_time = _backoff_with_jitter(initial_delay, attempt)
                     elapsed = time.monotonic() - start
                     if attempt < max_retries - 1 and elapsed + wait_time <= _MAX_TOTAL_WAIT_SECONDS:
-                        print(f"Server error {response.status_code}. Retrying in {wait_time:.1f}s...")
+                        # Name the failing provider/model — same rationale as
+                        # the 429 handler above.
+                        print(f"[{self.provider}/{self.model}] Server error {response.status_code}. Retrying in {wait_time:.1f}s...")
                         time.sleep(wait_time)
                         continue
                     else:
