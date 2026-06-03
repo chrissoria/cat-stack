@@ -22,6 +22,7 @@ from __future__ import annotations
 import ast
 import importlib
 import re
+import warnings
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 
@@ -97,12 +98,23 @@ def _strip_surrounding_quotes(s: str) -> str:
     return s
 
 
+_PYTHON_LITERAL_LEAD = frozenset("[({\"'-.0123456789")
+_PYTHON_LITERAL_KEYWORDS = frozenset({"True", "False", "None"})
+
+
 def parse_kwargs_string(s: Optional[str]) -> Dict[str, Any]:
     """Parse a `"key=val, key=val"` string into a Python kwargs dict.
 
     Each value is run through `ast.literal_eval` so numbers, booleans,
-    strings, and lists all work naturally.  Values that don't parse fall
-    back to the raw string.
+    strings, and lists all work naturally. When literal_eval fails,
+    the value falls back to the raw string — but if the value LOOKS
+    like the user was trying to write a Python literal (starts with
+    `[ ( { " ' -` or a digit, or equals `True`/`False`/`None`), a
+    UserWarning is emitted so typos like `max_retries=three` or
+    `tags=[apple` don't silently degrade to strings.
+
+    Plain prose values like `research_question=Why did you move?`
+    fall through silently — they aren't trying to be Python literals.
 
     Commas inside quotes / brackets are respected (no naive split).
 
@@ -160,6 +172,14 @@ def parse_kwargs_string(s: Optional[str]) -> Dict[str, Any]:
         try:
             kwargs[k] = ast.literal_eval(v)
         except (ValueError, SyntaxError):
+            if v and (v[0] in _PYTHON_LITERAL_LEAD or v in _PYTHON_LITERAL_KEYWORDS):
+                warnings.warn(
+                    f"parse_kwargs_string: couldn't parse {k}={v!r} as a Python "
+                    f"literal; treating as string. If you meant a number/list/bool, "
+                    f"check syntax (e.g. quote bare words: tags=['a','b']).",
+                    UserWarning,
+                    stacklevel=2,
+                )
             kwargs[k] = v
     return kwargs
 

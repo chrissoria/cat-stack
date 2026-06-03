@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`parse_kwargs_string` now warns on probable typos.** When a value
+  looks like the user was trying to write a Python literal (starts
+  with `[ ( { " ' -` or a digit, or equals `True`/`False`/`None`) but
+  fails `ast.literal_eval`, the function now emits a UserWarning
+  before falling back to the raw string. So `max_retries=three`,
+  `tags=[apple,banana]` (unquoted list), or `safety=Truee` (typo) now
+  surface as warnings instead of silently degrading to strings that
+  break downstream when compared against `int`/`bool` defaults. Plain
+  prose values like `research_question=Why did you move?` still fall
+  through silently — they aren't trying to be literals. The fallback
+  itself is preserved (backwards-compat for sibling wrappers); only
+  the silence is fixed.
 - **Removed dead `_utils.extract_json` duplicate.** Two versions of
   `extract_json` existed: `_utils.extract_json` (used the older
   `.replace(" ", "")` approach which broke spaces in summary strings)
@@ -106,6 +118,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   valid payload completes normally (state=ended, succeeded=2,
   errored=0) — the inspection helper returns silently on the
   all-success path, no behavior change for healthy batches.
+
+### Changed
+- **`description=` is now the canonical, content-neutral parameter for
+  data context across all public entry points.** `survey_question=` was a
+  cat-survey-era artifact bleeding into a domain-agnostic API; calling
+  e.g. `extract(survey_question="...")` looked wrong for non-survey
+  corpora (academic papers, social posts, support tickets). `classify`,
+  `extract`, and `prompt_tune` now treat `description` as the primary
+  parameter and emit a `DeprecationWarning` when `survey_question=` is
+  passed; the value is mirrored into `description` (and still threaded
+  through to the lower-level `survey_question` kwarg internally, so the
+  existing prompt assembly is unchanged). `explore` and `summarize`
+  already used `description` — their docstrings just got the
+  "content-neutral" framing cleanup. cat-survey and pre-rename notebooks
+  keep working unchanged but will surface a one-line warning per call.
+  8 unit tests cover the warning trigger, the mirror behavior, and the
+  "description wins when both set" tie-break.
 
 - **`chat_template_kwargs` no longer breaks classify() on Groq-routed HF
   models.** `_build_openai_payload` injects
