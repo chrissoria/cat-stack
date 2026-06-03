@@ -19,6 +19,46 @@ import requests
 # short enough that batch ensembles don't stall for half an hour."
 _MAX_TOTAL_WAIT_SECONDS = 300.0
 
+
+# ---------------------------------------------------------------------------
+# OpenAI reasoning_effort: per-model-family off-equivalent value.
+# ---------------------------------------------------------------------------
+#
+# Different OpenAI model generations expose different `reasoning_effort`
+# enum values. The "off" value (what `thinking_budget=0` maps to) is not
+# stable across families:
+#
+#   o1 / o3 / o4, gpt-5.0..gpt-5.3   → "minimal" (older floor)
+#   gpt-5.4 / gpt-5.5 / gpt-5.6      → "none"    (new strict-off; "minimal" deprecated)
+#
+# A model sent the wrong floor returns a 400 `unsupported_value`. The
+# table below is consulted in `_openai_reasoning_effort_floor()` to pick
+# the right value up-front. For unknown future families,
+# `UnifiedLLMClient.complete()` catches the 400 and falls back to "low"
+# (universally accepted across all reasoning_effort-supporting models).
+#
+# Entries are matched longest-prefix-first so "gpt-5.4" matches before
+# "gpt-5" — keep that invariant when extending.
+_OPENAI_REASONING_EFFORT_FLOORS = (
+    ("gpt-5.4", "none"),
+    ("gpt-5.5", "none"),
+    ("gpt-5.6", "none"),
+    ("gpt-5",   "minimal"),  # covers 5.0, 5.1, 5.2, 5.3
+    ("o1",      "minimal"),
+    ("o3",      "minimal"),
+    ("o4",      "minimal"),
+)
+
+
+def _openai_reasoning_effort_floor(model: str) -> str:
+    """Return the off-equivalent reasoning_effort value for a reasoning-
+    capable OpenAI model, based on its name prefix. Defaults to "minimal"
+    for models not covered by the table — the safest historical value."""
+    for prefix, floor in _OPENAI_REASONING_EFFORT_FLOORS:
+        if model.startswith(prefix):
+            return floor
+    return "minimal"
+
 __all__ = [
     # Main client
     "UnifiedLLMClient",
@@ -350,8 +390,18 @@ class UnifiedLLMClient:
 
         Args:
             force_json: If False and no json_schema, don't set response_format (for text responses)
-            thinking_budget: For OpenAI models, maps to reasoning_effort:
-                             0 or None → "minimal", >0 → "high"
+            thinking_budget: For OpenAI reasoning-capable models, maps to
+                             reasoning_effort. `thinking_budget=0` picks the
+                             provider's off-equivalent value from
+                             `_OPENAI_REASONING_EFFORT_FLOORS`
+                             ("none" for gpt-5.4+, "minimal" for o-series
+                             and gpt-5.0-5.3). `thinking_budget>0` maps to
+                             "high". If the chosen value is rejected at
+                             runtime with 400 `unsupported_value`,
+                             `complete()` retries with "low" (universally
+                             accepted) and caches the override on the
+                             client so subsequent calls skip the bad
+                             value.
         """
         payload = {
             "model": self.model,
@@ -388,7 +438,14 @@ class UnifiedLLMClient:
                 if thinking_budget > 0:
                     payload["reasoning_effort"] = "high"
                 else:
-                    payload["reasoning_effort"] = "minimal"
+                    # Off-equivalent value depends on the model family —
+                    # see `_OPENAI_REASONING_EFFORT_FLOORS`. A previously-
+                    # discovered fallback (from a 400 retry in complete())
+                    # wins if cached on the client.
+                    payload["reasoning_effort"] = (
+                        getattr(self, "_reasoning_effort_override", None)
+                        or _openai_reasoning_effort_floor(self.model)
+                    )
         elif creativity is not None:
             payload["temperature"] = creativity
 
@@ -637,7 +694,13 @@ class UnifiedLLMClient:
             creativity: Temperature setting (None for default)
             thinking_budget: Controls reasoning behavior per provider:
                 - Google: Token budget for extended thinking (0 to disable, >0 to enable)
-                - OpenAI: Maps to reasoning_effort (0 → "minimal", >0 → "high")
+                - OpenAI: Maps to reasoning_effort. `thinking_budget=0`
+                  picks the model's off-equivalent value from
+                  `_OPENAI_REASONING_EFFORT_FLOORS` ("none" for gpt-5.4+,
+                  "minimal" for older o-series / gpt-5.0-5.3). If the
+                  picked value is rejected at runtime, the client falls
+                  back to "low" (universally accepted) and caches the
+                  override. `thinking_budget>0` maps to "high".
                 - Anthropic: Enables extended thinking (0 to disable, >0 to enable with min 1024)
             force_json: If True and no json_schema, still request JSON output.
                        Set to False for text-only responses (e.g., CoVe intermediate steps)
@@ -693,15 +756,23 @@ class UnifiedLLMClient:
                             payload.pop("response_format")
                             continue  # Retry immediately without response_format
 
-                    # HF: some routers (notably Groq behind HF Inference
-                    # Providers, which serves Llama-3.x and gpt-oss) reject
-                    # `chat_template_kwargs` outright with
-                    #   "property 'chat_template_kwargs' is unsupported".
+                    # HF: some routers reject `chat_template_kwargs` outright.
+                    # The wording varies per router:
+                    #   Groq:      "property 'chat_template_kwargs' is unsupported"
+                    #   Fireworks: "Extra inputs are not permitted, field:
+                    #               'chat_template_kwargs'"
                     # The kwarg is only there to disable thinking on Qwen3-
                     # family models when thinking_budget=0 — dropping it on
                     # a router that doesn't honor it is harmless. Strip and
                     # retry, mirror the response_format pattern above.
-                    if "chat_template_kwargs" in error_text and "unsupported" in error_text:
+                    _ctk_rejected = (
+                        "chat_template_kwargs" in error_text
+                        and any(phrase in error_text for phrase in (
+                            "unsupported", "not permitted", "not allowed",
+                            "extra inputs", "extra fields", "unknown field",
+                        ))
+                    )
+                    if _ctk_rejected:
                         if "chat_template_kwargs" in payload:
                             if not getattr(self, '_warned_no_chat_template_kwargs', False):
                                 print(f"\n[CatLLM] Model '{self.model}' does not accept chat_template_kwargs.")
@@ -709,6 +780,31 @@ class UnifiedLLMClient:
                                 self._warned_no_chat_template_kwargs = True
                             payload.pop("chat_template_kwargs")
                             continue  # Retry immediately without chat_template_kwargs
+
+                    # OpenAI reasoning_effort enum varies across model
+                    # families — gpt-5.4+ deprecated "minimal" in favor of
+                    # "none"; older models reject "none". If the model
+                    # rejects our chosen value with 400 unsupported_value,
+                    # fall back to "low" (universally accepted across all
+                    # OpenAI reasoning-effort-supporting models) and cache
+                    # the override so subsequent calls skip the doomed
+                    # value. If "low" itself is rejected, drop reasoning_effort
+                    # entirely.
+                    if "reasoning_effort" in error_text and (
+                        "unsupported" in error_text or "invalid" in error_text
+                    ):
+                        current = payload.get("reasoning_effort")
+                        if current not in (None, "low"):
+                            if not getattr(self, '_warned_reasoning_effort_fallback', False):
+                                print(f"\n[CatLLM] Model '{self.model}' rejected reasoning_effort='{current}'.")
+                                print(f"  Falling back to 'low' and caching for subsequent calls on this client.\n")
+                                self._warned_reasoning_effort_fallback = True
+                            self._reasoning_effort_override = "low"
+                            payload["reasoning_effort"] = "low"
+                            continue
+                        elif current == "low" and "reasoning_effort" in payload:
+                            payload.pop("reasoning_effort")
+                            continue
 
                     # HuggingFace: try other routers when the current one
                     # rejects the model with a "wrong router" 400.

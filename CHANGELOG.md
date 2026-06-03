@@ -7,7 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-06-03
+
 ### Fixed
+- **OpenAI `reasoning_effort` now handled consistently and
+  conditionally across GPT-5 sub-families.** Two changes:
+
+  *(a) Per-family off-equivalent mapping.* OpenAI's `reasoning_effort`
+  enum is not stable across model generations. The older o-series and
+  gpt-5.0–5.3 accept `["minimal", "low", "medium", "high"]`; gpt-5.4+
+  deprecated `"minimal"` and switched to
+  `["none", "low", "medium", "high", "xhigh"]`. The previous hardcoded
+  `"minimal"` for `thinking_budget=0` caused every gpt-5.4* request to
+  fail with a 400 `unsupported_value` error and exhaust the retry
+  budget. A new module-level constant
+  `_OPENAI_REASONING_EFFORT_FLOORS` in `_providers.py` holds the
+  per-prefix off value (matched longest-prefix-first), consulted by a
+  new helper `_openai_reasoning_effort_floor(model)`. `_build_openai_payload`
+  now picks `"none"` for `gpt-5.4`/`gpt-5.5`/`gpt-5.6`, and `"minimal"`
+  for `o1`/`o3`/`o4`/`gpt-5.0–5.3`.
+
+  *(b) Runtime fallback to `"low"` on 400 unsupported_value.* For
+  model families not yet in the prefix table (future generations,
+  third-party hosts that rename the enum), `UnifiedLLMClient.complete()`
+  now mirrors the existing `response_format` / `chat_template_kwargs`
+  fallback pattern: when a 400 mentions `reasoning_effort` and
+  `unsupported`/`invalid`, retry with `"low"` (universally accepted
+  across all OpenAI reasoning_effort-supporting models) and cache the
+  override on `self._reasoning_effort_override` so subsequent calls
+  skip the doomed value. If `"low"` itself is rejected, drop
+  `reasoning_effort` entirely.
+
+  Surfaced by a paper-pipeline smoke test against eight providers;
+  gpt-5.4-mini was the only closed provider that failed every retry
+  before this fix.
+
+- **HuggingFace `chat_template_kwargs` rejection detection broadened
+  to cover Fireworks-style 400 wording.** Cat-stack already strips
+  `chat_template_kwargs` on routers that don't accept it (originally
+  to handle Groq's `"property 'chat_template_kwargs' is unsupported"`
+  message). Fireworks (now serving Kimi K2.6 via the HuggingFace
+  router) phrases the same rejection as
+  `"Extra inputs are not permitted, field: 'chat_template_kwargs'"` —
+  no occurrence of `"unsupported"`, so the old heuristic missed it
+  and the call exhausted its retry budget. The detection check now
+  matches any of `("unsupported", "not permitted", "not allowed",
+  "extra inputs", "extra fields", "unknown field")` alongside the
+  field name. Surfaced by the same eight-provider smoke test;
+  Kimi K2.6 was the only HuggingFace-routed model that failed every
+  retry before this fix.
+
 - **PDF inputs are now validated against the `%PDF-` magic-byte header.**
   PyMuPDF is famously permissive: it will happily "open" an HTML file
   saved with `.pdf` extension, render the result as a near-blank page,
