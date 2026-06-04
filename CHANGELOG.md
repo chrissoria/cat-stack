@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.5] - 2026-06-04
+
+### Changed
+- **HTTP request timeout is now provider-conditional.** Cloud providers
+  (OpenAI, Anthropic, Google, Mistral, xAI, HuggingFace, Perplexity)
+  continue to use the previous 120 s per-request timeout and 300 s
+  cumulative-retry budget — those settings are right for cloud-API
+  latencies. **The local Ollama path now gets 600 s per request and
+  1200 s cumulative**, which accommodates the long-tail per-row
+  latency that emerges on memory-constrained hardware (16 GB Macs
+  running 14B+ models can take 2-4+ minutes per row late in a long
+  session under thermal/memory pressure). Surfaced during the
+  small-tier paper run on 16 GB M1 Pro where qwen3:14b had 10 rows of
+  e1b and 143 rows of a19f marked as `processing_status='error'` due
+  to spurious 120-second HTTP timeouts even though Ollama was on the
+  verge of producing valid output. New module-level constants in
+  `_providers.py`:
+    - `_REQUEST_TIMEOUT = 120.0` (cloud, unchanged)
+    - `_OLLAMA_REQUEST_TIMEOUT = 600.0` (new)
+    - `_OLLAMA_MAX_TOTAL_WAIT_SECONDS = 1200.0` (new)
+
+  Plus helper functions `_request_timeout_for(provider)` and
+  `_max_total_wait_for(provider)` for downstream call sites.
+  `UnifiedLLMClient.complete()` now consults both per call.
+
+  Cloud providers unaffected — same timeouts as before. Pure logging
+  / control-flow change, no behavior difference for non-Ollama paths.
+
+  **Power-user override paths** (in addition to the conditional default):
+    - Construct `UnifiedLLMClient` directly with explicit
+      `request_timeout=<float>` and/or `max_total_wait=<float>` kwargs.
+      Per-instance overrides win over the conditional default.
+    - Module-level `set_session_timeouts(request_timeout, max_total_wait)`
+      registers a process-wide override that all subsequently-constructed
+      clients consult. Pass `None` to clear.
+
+  Exposing these as `classify()`-level kwargs would require threading
+  through every UnifiedLLMClient construction site (~8 in the ensemble
+  code) and is deferred to a follow-up. Validated end-to-end on a
+  16 GB M1 Pro: 10 e1b rows that all failed under 1.6.4's 120 s
+  timeout (avg 132 sec/row, max 193 sec/row) all succeeded under
+  1.6.5's 600 s conditional default.
+
 ## [1.6.4] - 2026-06-03
 
 ### Changed

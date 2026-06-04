@@ -157,6 +157,15 @@ All providers use the same `(model_name, provider, api_key)` tuple format. Provi
   as `success`)
 - **Embedding similarity** tiebreaker for ensemble consensus ties
 - **Pilot test** — validate classifications on a small sample before committing to the full run
+- **Provider-conditional HTTP timeouts** — cloud providers use a tight
+  120 s per-request timeout (catches genuine hangs without waiting too
+  long on transient API blips), and the Ollama provider uses a wider
+  600 s per-request / 1200 s cumulative budget (accommodates the long
+  per-row tails that emerge when running 14B+ models on memory-
+  constrained hardware like 16 GB Macs). Power users can override per
+  client: `UnifiedLLMClient(provider, key, model, request_timeout=900,
+  max_total_wait=1800)`, or set a process-wide override with
+  `catstack._providers.set_session_timeouts(request_timeout=..., max_total_wait=...)`
 
 ## Future work / contributions welcome
 

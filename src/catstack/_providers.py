@@ -19,6 +19,52 @@ import requests
 # short enough that batch ensembles don't stall for half an hour."
 _MAX_TOTAL_WAIT_SECONDS = 300.0
 
+# Per-HTTP-request timeout, in seconds. For cloud providers (OpenAI,
+# Anthropic, Google, …) inference is usually 1-10 seconds, so 120 s is
+# a generous ceiling that catches genuine hangs.
+#
+# Local Ollama is a different regime: on memory-constrained hardware
+# (e.g., 16 GB M1 Pro running a 14 B-class model), individual rows can
+# take 2-4+ minutes under thermal/memory pressure. cat-stack 1.6.4
+# logged frequent spurious "Request timeout" failures in those
+# conditions even when Ollama was about to produce valid output.
+# `_OLLAMA_REQUEST_TIMEOUT` and `_OLLAMA_MAX_TOTAL_WAIT_SECONDS` give
+# the Ollama path a much longer window. Surfaced during the small-tier
+# paper run, 2026-06-04.
+_REQUEST_TIMEOUT = 120.0          # cloud providers
+_OLLAMA_REQUEST_TIMEOUT = 600.0   # local Ollama — 5x cloud, accommodates slow-row tails
+_OLLAMA_MAX_TOTAL_WAIT_SECONDS = 1200.0  # 4x cloud, since per-call timeout is also 5x
+
+
+# Session-level user override. Set non-None at the start of a `classify()`
+# call to override the conditional defaults for ALL UnifiedLLMClient
+# instances constructed during that call without per-site arg threading.
+# Single-process scope; safe under cat-stack's intra-call parallelism
+# (per-call sets/resets bracket all workers).
+_session_request_timeout: float = None
+_session_max_total_wait: float = None
+
+
+def set_session_timeouts(request_timeout: float = None, max_total_wait: float = None):
+    """Set the session-level HTTP-timeout overrides. Pass None to clear."""
+    global _session_request_timeout, _session_max_total_wait
+    _session_request_timeout = request_timeout
+    _session_max_total_wait = max_total_wait
+
+
+def _request_timeout_for(provider: str) -> float:
+    """Per-request HTTP timeout. Session override wins over provider default."""
+    if _session_request_timeout is not None:
+        return _session_request_timeout
+    return _OLLAMA_REQUEST_TIMEOUT if provider == "ollama" else _REQUEST_TIMEOUT
+
+
+def _max_total_wait_for(provider: str) -> float:
+    """Per-call cumulative-wait cap. Session override wins."""
+    if _session_max_total_wait is not None:
+        return _session_max_total_wait
+    return _OLLAMA_MAX_TOTAL_WAIT_SECONDS if provider == "ollama" else _MAX_TOTAL_WAIT_SECONDS
+
 
 # ---------------------------------------------------------------------------
 # OpenAI reasoning_effort: per-model-family off-equivalent value.
@@ -274,10 +320,27 @@ PROVIDER_CONFIG = {
 class UnifiedLLMClient:
     """A unified client for calling various LLM providers via HTTP."""
 
-    def __init__(self, provider: str, api_key: str, model: str):
+    def __init__(self, provider: str, api_key: str, model: str,
+                 request_timeout: float = None,
+                 max_total_wait: float = None):
+        """
+        Args:
+            request_timeout (float | None): Override the per-HTTP-request
+                timeout (seconds). When None, uses the provider-conditional
+                default: 120 s for cloud providers, 600 s for Ollama.
+                Pass an explicit float to override per call site.
+            max_total_wait (float | None): Override the per-call cumulative
+                retry budget (seconds). When None, uses provider-conditional
+                default: 300 s for cloud, 1200 s for Ollama.
+        """
         self.provider = _normalize_provider(provider)
         self.api_key = api_key
         self.model = model
+        # User-level overrides for HTTP timeouts. None means "use the
+        # provider-conditional default" (see _request_timeout_for /
+        # _max_total_wait_for at module level).
+        self._request_timeout_override = request_timeout
+        self._max_total_wait_override = max_total_wait
 
         # Lazy HuggingFace router fallback — start with None and only
         # populate when we either (a) have an explicit router suffix, or
@@ -755,8 +818,20 @@ class UnifiedLLMClient:
             payload.pop("response_format")
 
         # Track cumulative wait so a long string of transient errors can't
-        # block the call indefinitely. See _MAX_TOTAL_WAIT_SECONDS.
+        # block the call indefinitely. Timeouts are provider-conditional by
+        # default; user overrides on the client instance (set at __init__)
+        # take precedence.
         start = time.monotonic()
+        request_timeout = (
+            self._request_timeout_override
+            if self._request_timeout_override is not None
+            else _request_timeout_for(self.provider)
+        )
+        max_total_wait = (
+            self._max_total_wait_override
+            if self._max_total_wait_override is not None
+            else _max_total_wait_for(self.provider)
+        )
         # Per-call flag: have we already tried stripping response_format on a
         # transient error this call? Only strip once per call so we don't
         # mutate payload on every retry tick.
@@ -769,7 +844,7 @@ class UnifiedLLMClient:
                     endpoint,
                     headers=headers,
                     json=payload,
-                    timeout=120,
+                    timeout=request_timeout,
                 )
 
                 # Check for HTTP errors
@@ -854,7 +929,7 @@ class UnifiedLLMClient:
                     if wait_time is None:
                         wait_time = _backoff_with_jitter(initial_delay, attempt, multiplier=5.0)
                     elapsed = time.monotonic() - start
-                    if attempt < max_retries - 1 and elapsed + wait_time <= _MAX_TOTAL_WAIT_SECONDS:
+                    if attempt < max_retries - 1 and elapsed + wait_time <= max_total_wait:
                         # Name the throttling provider/model so multi-model
                         # ensemble runs can attribute the slowdown.
                         print(f"[{self.provider}/{self.model}] Rate limited. Waiting {wait_time:.1f}s...")
@@ -894,7 +969,7 @@ class UnifiedLLMClient:
                     if wait_time is None:
                         wait_time = _backoff_with_jitter(initial_delay, attempt)
                     elapsed = time.monotonic() - start
-                    if attempt < max_retries - 1 and elapsed + wait_time <= _MAX_TOTAL_WAIT_SECONDS:
+                    if attempt < max_retries - 1 and elapsed + wait_time <= max_total_wait:
                         # Name the failing provider/model — same rationale as
                         # the 429 handler above.
                         print(f"[{self.provider}/{self.model}] Server error {response.status_code}. Retrying in {wait_time:.1f}s...")
@@ -911,7 +986,7 @@ class UnifiedLLMClient:
             except requests.exceptions.Timeout:
                 wait_time = _backoff_with_jitter(initial_delay, attempt)
                 elapsed = time.monotonic() - start
-                if attempt < max_retries - 1 and elapsed + wait_time <= _MAX_TOTAL_WAIT_SECONDS:
+                if attempt < max_retries - 1 and elapsed + wait_time <= max_total_wait:
                     print(f"Request timeout. Retrying in {wait_time:.1f}s...")
                     time.sleep(wait_time)
                 else:
@@ -920,7 +995,7 @@ class UnifiedLLMClient:
             except requests.exceptions.RequestException as e:
                 wait_time = _backoff_with_jitter(initial_delay, attempt)
                 elapsed = time.monotonic() - start
-                if attempt < max_retries - 1 and elapsed + wait_time <= _MAX_TOTAL_WAIT_SECONDS:
+                if attempt < max_retries - 1 and elapsed + wait_time <= max_total_wait:
                     print(f"Request error: {e}. Retrying in {wait_time:.1f}s...")
                     time.sleep(wait_time)
                 else:
