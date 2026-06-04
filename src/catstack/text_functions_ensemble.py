@@ -3043,7 +3043,7 @@ Categorize text responses {cove_categorize}:
                         messages=messages,
                         json_schema=json_schemas[cfg["model"]],
                         creativity=effective_creativity,
-                        thinking_budget=thinking_budget if cfg["provider"] in ("google", "openai", "anthropic", "huggingface", "huggingface-together") else None,
+                        thinking_budget=thinking_budget if cfg["provider"] in ("google", "openai", "anthropic", "huggingface", "huggingface-together", "ollama") else None,
                         max_retries=max_retries,
                     )
 
@@ -3100,7 +3100,7 @@ Categorize text responses {cove_categorize}:
                         messages=messages,
                         json_schema=json_schemas[cfg["model"]],
                         creativity=effective_creativity,
-                        thinking_budget=thinking_budget if cfg["provider"] in ("google", "openai", "anthropic", "huggingface", "huggingface-together") else None,
+                        thinking_budget=thinking_budget if cfg["provider"] in ("google", "openai", "anthropic", "huggingface", "huggingface-together", "ollama") else None,
                         max_retries=max_retries,
                     )
 
@@ -3184,7 +3184,7 @@ Categorize text responses {cove_categorize}:
                             messages=_retry_messages,
                             json_schema=json_schemas[cfg["model"]],
                             creativity=effective_creativity,
-                            thinking_budget=thinking_budget if cfg["provider"] in ("google", "openai", "anthropic", "huggingface", "huggingface-together") else None,
+                            thinking_budget=thinking_budget if cfg["provider"] in ("google", "openai", "anthropic", "huggingface", "huggingface-together", "ollama") else None,
                             max_retries=max_retries,
                         )
 

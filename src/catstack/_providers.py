@@ -125,6 +125,64 @@ _HF_NEEDS_ENABLE_THINKING_OFF = (
 def _hf_model_needs_enable_thinking_off(model: str) -> bool:
     return any(model.startswith(p) for p in _HF_NEEDS_ENABLE_THINKING_OFF)
 
+
+# ---------------------------------------------------------------------------
+# Ollama reasoning control: per-model-family parameter format for the
+# top-level `think` field on chat / generate requests.
+#
+# Ollama standardized on a single API field name (`think`) but the value
+# type differs per model family — gpt-oss takes an enum, most others take
+# a boolean. See https://docs.ollama.com/capabilities/thinking.
+#
+# Coverage philosophy: list every Ollama reasoning model family we know of
+# AND that uses the `think` field. Reasoning models that gate via other
+# mechanisms (system prompts, chat-template flags) are explicitly noted in
+# the "NOT in registry" comment below and handled elsewhere — adding them
+# here would silently inject a no-op `think` field, which Ollama may
+# accept but won't honor, leading to surprising behavior.
+#
+# Entries are checked longest-prefix-first by `_ollama_think_value()`, so
+# put more-specific prefixes earlier when adding (e.g. `qwen3-coder` before
+# `qwen3` if they differ).
+#
+#   Registry tuple: (model prefix, value-format, low_value, high_value)
+#
+# Models in registry — `think` field works:
+#   gpt-oss          — enum: "low" / "medium" / "high"  (cannot fully disable)
+#   qwen3 / qwen3.*  — bool: True / False               (covers -thinking variants too)
+#   qwq              — bool: True / False               (Qwen QwQ — preceded Qwen3)
+#   deepseek-r1      — bool: True / False               (covers -distill variants)
+#
+# Models NOT in registry — different mechanism, do NOT add here:
+#   magistral        — controlled via system prompt (Mistral Magistral)
+#   exaone-deep      — uses Modelfile-baked reasoning, no API toggle exposed
+#   marco-o1         — uses chat-template wrappers, not `think` field
+#
+# Models with NO reasoning (so `think` should not appear at all):
+#   gemma2/3, llama3.x/4.x, mistral, mistral-nemo, qwen2.5 (non-QwQ),
+#   phi3/4, granite, olmo, codestral, …
+# These are NOT added; the registry's None-return for unmatched prefixes
+# correctly omits the `think` field for them.
+# ---------------------------------------------------------------------------
+_OLLAMA_REASONING_MODELS = (
+    ("gpt-oss",      "enum", "low", "high"),
+    ("qwen3",        "bool", False, True),  # covers qwen3.*, qwen3-*, -thinking-* variants
+    ("qwq",          "bool", False, True),
+    ("deepseek-r1",  "bool", False, True),  # covers -distill-qwen, -distill-llama, etc.
+)
+
+
+def _ollama_think_value(model: str, thinking_budget):
+    """Map cat-stack's thinking_budget to the right Ollama `think` value for
+    this model family. Returns None if the model isn't in the
+    reasoning-capable registry (no `think` field should be set)."""
+    if thinking_budget is None:
+        return None
+    for prefix, fmt, low_val, high_val in _OLLAMA_REASONING_MODELS:
+        if model.startswith(prefix):
+            return low_val if thinking_budget == 0 else high_val
+    return None
+
 __all__ = [
     # Main client
     "UnifiedLLMClient",
@@ -457,6 +515,12 @@ class UnifiedLLMClient:
         elif self.provider in ("huggingface", "huggingface-together"):
             # HuggingFace needs thinking_budget to disable thinking on models that reason by default
             return self._build_openai_payload(messages, json_schema, creativity, force_json, thinking_budget)
+        elif self.provider == "ollama":
+            # Ollama threads thinking_budget to its top-level `think` field for
+            # reasoning-capable models (gpt-oss accepts low/medium/high; others
+            # accept booleans). Without this, gpt-oss family models emit long
+            # <think> blocks by default that bloat per-row generation 3-5x.
+            return self._build_openai_payload(messages, json_schema, creativity, force_json, thinking_budget)
         else:
             # Other OpenAI-compatible providers (xai, mistral, etc.)
             return self._build_openai_payload(messages, json_schema, creativity, force_json)
@@ -531,6 +595,19 @@ class UnifiedLLMClient:
                     )
         elif creativity is not None:
             payload["temperature"] = creativity
+
+        # Ollama: per-model-family reasoning control via the top-level
+        # `think` field. gpt-oss expects an enum ("low"/"medium"/"high");
+        # qwen3/deepseek-r1 expect a boolean. Models not in the
+        # `_OLLAMA_REASONING_MODELS` registry don't support reasoning and
+        # get no `think` field (would be a no-op at best, validator-
+        # confusing at worst). Without this, Ollama-served gpt-oss
+        # produces long `<think>` blocks by default that bloat per-row
+        # generation 3-5x.
+        if self.provider == "ollama":
+            think_value = _ollama_think_value(self.model, thinking_budget)
+            if think_value is not None:
+                payload["think"] = think_value
 
         # HuggingFace: disable thinking on model families whose chat
         # template honors `enable_thinking` (Qwen3-family). Other HF-routed

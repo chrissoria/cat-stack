@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.6] - 2026-06-04
+
+### Added
+- **Ollama `think` field forwarding for reasoning-capable models.**
+  Cat-stack now consults a per-model-family registry
+  (`_OLLAMA_REASONING_MODELS` in `_providers.py`) and injects the
+  top-level `think` field on Ollama chat-completion payloads for
+  reasoning-capable model families. Ollama standardized the API field
+  name across all reasoning models (`think`), but value types differ
+  per family — the registry encodes the format and per-budget values
+  side-by-side:
+
+  ```python
+  _OLLAMA_REASONING_MODELS = (
+      ("gpt-oss",      "enum", "low", "high"),  # gpt-oss expects an enum
+      ("qwen3",        "bool", False, True),    # most others use boolean
+      ("qwq",          "bool", False, True),
+      ("deepseek-r1",  "bool", False, True),    # covers -distill-* variants
+  )
+  ```
+
+  When `thinking_budget=0` is set on `classify()` (the default), Ollama
+  gpt-oss receives `"think": "low"` (the model's shortest reasoning
+  trace — Ollama doesn't yet support fully disabling gpt-oss
+  reasoning); Ollama Qwen3 / QwQ / DeepSeek-R1 receive `"think":
+  false`. Models not in the registry (gemma3, llama3.x, llama4.x,
+  mistral, phi3/4, etc.) get no `think` field — the safe default. The
+  cat-stack patch is harmless for any unlisted model.
+
+  Three places touched, all surgical:
+    - `_build_payload` now dispatches Ollama through
+      `_build_openai_payload` with `thinking_budget` forwarded (was
+      previously dropped at the `else` branch).
+    - `_build_openai_payload` injects `payload["think"]` when
+      `_ollama_think_value(model, budget)` returns non-None.
+    - `text_functions_ensemble.py` adds `"ollama"` to the
+      thinking_budget-forwarding provider lists (3 sites).
+
+  The HuggingFace path (`chat_template_kwargs={"enable_thinking":
+  False}` for HF-routed Qwen3) is untouched — different mechanism,
+  different code path, no conflict.
+
+  Surfaced during the small-tier paper run: Ollama-served gpt-oss:20b
+  emits long `<think>` blocks by default that bloat per-row generation
+  3-5x. With `think="low"` forwarded, output is shorter, but for our
+  16 GB M1 Pro this didn't make the model viable (a separate GPU-memory
+  ceiling at Q4_K_M = 14 GB resident exceeds what's available after
+  macOS + Python + cat-stack take their share). The patch is still a
+  real improvement for users on memory-adequate hardware and for
+  Ollama-served Qwen3 / DeepSeek-R1 / QwQ users.
+
+### Notes for maintainers
+- When adding a new Ollama reasoning model: append the tuple to
+  `_OLLAMA_REASONING_MODELS`. Put more-specific prefixes earlier (e.g.
+  `qwen3-coder` would go before `qwen3` if their reasoning toggle
+  differs).
+- Magistral (Mistral's reasoning model), exaone-deep, and marco-o1 are
+  intentionally OMITTED from the registry — they use system-prompt
+  injection or chat-template wrappers, not the `think` field. Adding
+  them to this registry would silently inject a no-op `think` field.
+  See the in-code comment for the canonical list.
+
 ## [1.6.5] - 2026-06-04
 
 ### Changed
