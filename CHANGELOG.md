@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.7] - 2026-06-11
+
+### Fixed
+- **Anthropic `temperature` deprecation (Opus 4.7+).** Newer Anthropic
+  models (`claude-opus-4-7`, `claude-opus-4-8`) return
+  `400 "temperature is deprecated for this model."` when the
+  `temperature` parameter is sent. Pre-fix, every request to these models
+  failed and `classify()` produced all-`NA` columns for them. The fix
+  mirrors the existing OpenAI reasoning-model handling: a prefix table
+  (`_ANTHROPIC_TEMPERATURE_DEPRECATED`) + helper
+  (`_anthropic_supports_temperature()`) skips `temperature` up-front in
+  `_build_anthropic_payload` for the known-deprecated models, and
+  `complete()` strips it on a runtime `400` (caching the decision on the
+  client) as a safety net for future families not yet in the table.
+  Models that still accept `temperature` (`claude-sonnet-4-6`,
+  `claude-opus-4-6`, and earlier) are unaffected.
+
+### Changed
+- **`classify()` no longer truncates `input_data` in its output.**
+  `build_output_dataframes` previously truncated the `input_data` column
+  to a 100-char preview, which silently broke downstream joins against
+  gold-standard files and fed truncated text to any pipeline reusing the
+  column as input. The classify writer now emits the full
+  (whitespace-collapsed) input. `summarize_ensemble` keeps its preview
+  truncation intentionally — its inputs can be whole documents/PDF pages.
+
 ## [1.6.6] - 2026-06-04
 
 ### Added

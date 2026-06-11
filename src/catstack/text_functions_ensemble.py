@@ -3638,11 +3638,12 @@ def build_output_dataframes(
     # Populate data
     for idx, result in enumerate(all_results):
         combined_data["input_index"].append(idx)
-        # Truncate input_data for readability
+        # Full input_data (whitespace-collapsed). Truncating here breaks
+        # downstream joins against gold-standard files and silently feeds
+        # truncated text to any pipeline that reuses input_data as input.
         raw = result["response"]
         clean = " ".join(str(raw).split())  # collapse whitespace/newlines
-        preview = clean[:100] + "..." if len(clean) > 100 else clean
-        combined_data["input_data"].append(preview)
+        combined_data["input_data"].append(clean)
         aggregated = result["aggregated"]
 
         # Add PDF metadata if present
@@ -4464,7 +4465,13 @@ def summarize_ensemble(
             # synthesis still has *something* to anchor on (prior behavior).
             original_text_for_synthesis = entry.get("page_text") or page_label
         else:
-            # Truncate input_data for readability; add input_index for joining
+            # Truncate input_data for readability; add input_index for joining.
+            # Truncation is intentional HERE (summarize): inputs can be whole
+            # documents/PDF pages, and full text would bloat the output and the
+            # synthesis context. classify()'s writer (build_output_dataframes)
+            # deliberately does NOT truncate — survey-length inputs there are
+            # reused for downstream joins. See repo TODO for the permanent
+            # per-function input_data design (preview + stable join key).
             clean = " ".join(str(item).split())  # collapse whitespace/newlines
             preview = clean[:100] + "..." if len(clean) > 100 else clean
             row = {

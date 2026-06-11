@@ -127,6 +127,30 @@ def _hf_model_needs_enable_thinking_off(model: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Anthropic deprecated the `temperature` parameter starting with the Opus 4.7 /
+# 4.8 generation: these models return 400 "`temperature` is deprecated for this
+# model." if it is sent. Older models (opus-4-6, sonnet-4-6, sonnet-4-5, and
+# earlier) still accept it. This mirrors the OpenAI reasoning-model handling
+# above — we skip `temperature` up-front for the known-deprecated prefixes in
+# `_build_anthropic_payload`, and `UnifiedLLMClient.complete()` strips it on a
+# runtime 400 as a safety net for future families not yet in this table.
+#
+# Matched by name prefix; extend the tuple when new temperature-free models
+# ship.
+# ---------------------------------------------------------------------------
+_ANTHROPIC_TEMPERATURE_DEPRECATED = (
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+)
+
+
+def _anthropic_supports_temperature(model: str) -> bool:
+    """False for Anthropic models that reject the `temperature` param."""
+    m = (model or "").lower()
+    return not any(m.startswith(p) for p in _ANTHROPIC_TEMPERATURE_DEPRECATED)
+
+
+# ---------------------------------------------------------------------------
 # Ollama reasoning control: per-model-family parameter format for the
 # top-level `think` field on chat / generate requests.
 #
@@ -660,6 +684,14 @@ class UnifiedLLMClient:
         if system_content:
             payload["system"] = system_content
 
+        # Newer Anthropic models (Opus 4.7+) deprecated `temperature` and 400 if
+        # it is sent. Skip it for those known prefixes, and also honor the flag
+        # cached by complete()'s runtime 400 fallback for future families.
+        _temp_ok = (
+            _anthropic_supports_temperature(self.model)
+            and not getattr(self, "_anthropic_temperature_unsupported", False)
+        )
+
         # Extended thinking for Anthropic (minimum 1024 tokens)
         # When thinking is enabled, temperature must be 1 (Anthropic requirement),
         # so we skip setting temperature from creativity in that case
@@ -669,11 +701,12 @@ class UnifiedLLMClient:
                 "type": "enabled",
                 "budget_tokens": budget,
             }
-            payload["temperature"] = 1
+            if _temp_ok:
+                payload["temperature"] = 1
             # When thinking is enabled, max_tokens must be larger than budget_tokens
             if payload["max_tokens"] <= budget:
                 payload["max_tokens"] = budget + 4096
-        elif creativity is not None:
+        elif creativity is not None and _temp_ok:
             payload["temperature"] = creativity
 
         # Use tool calling for structured output (most reliable for Anthropic)
@@ -988,6 +1021,25 @@ class UnifiedLLMClient:
                         elif current == "low" and "reasoning_effort" in payload:
                             payload.pop("reasoning_effort")
                             continue
+
+                    # Anthropic deprecated `temperature` for newer models
+                    # (Opus 4.7+): they 400 with "`temperature` is deprecated
+                    # for this model." Strip it, cache on the client so the
+                    # payload builder skips it for subsequent rows on this
+                    # client, and retry. Safety net for families not yet in
+                    # `_ANTHROPIC_TEMPERATURE_DEPRECATED`.
+                    if (
+                        "temperature" in error_text
+                        and "deprecated" in error_text
+                        and "temperature" in payload
+                    ):
+                        if not getattr(self, '_warned_temperature_deprecated', False):
+                            print(f"\n[CatLLM] Model '{self.model}' deprecated the temperature parameter.")
+                            print(f"  Dropping it and caching for subsequent calls on this client.\n")
+                            self._warned_temperature_deprecated = True
+                        self._anthropic_temperature_unsupported = True
+                        payload.pop("temperature")
+                        continue
 
                     # HuggingFace: try other routers when the current one
                     # rejects the model with a "wrong router" 400.
