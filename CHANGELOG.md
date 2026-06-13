@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.9] - 2026-06-13
+
+### Fixed
+- **JSON formatter could not load on transformers 4.56–4.57.x.** The
+  formatter model repo's `tokenizer_config.json` stored `extra_special_tokens`
+  as a list, which those transformers versions reject (`'list' object has no
+  attribute 'keys'`). The formatter only loads when a classification model
+  emits malformed JSON, so this surfaced only for weak local models. Two-part
+  fix: (a) the HF repo `chrissoria/catllm-json-formatter` config was corrected
+  (`extra_special_tokens` → `{}`; the tokens remain in the tokenizer, verified
+  lossless) — this helps ALL versions with no upgrade; (b)
+  `_formatter.load_formatter()` now defensively snapshots the repo and
+  normalizes a list-valued `extra_special_tokens` to `{}` if it ever sees the
+  error again, and tries `dtype=` (≥4.56) then falls back to `torch_dtype=`
+  (<4.56) on model load. Thanks to a beta user for the diagnosis.
+- **Formatter output truncated for large category sets.** `run_formatter`
+  generated `max_new_tokens=128`, which truncated the JSON for 28- and
+  48-category tasks; raised to 512.
+- **Silent degradation when auto-installing formatter deps.** When
+  `json_formatter=True` and deps were missing, the in-process pip install
+  could not be imported by the same running process, and classification
+  silently degraded to all-error rows. `_check_dependencies_installed()` now
+  calls `importlib.invalidate_caches()`, and when deps land on disk but can't
+  be imported in-process the user gets a clear "re-run" message instead of
+  broken output. Pre-installing `pip install 'cat-stack[formatter]'` avoids
+  the path entirely (recommended pre-step).
+
 ## [1.6.8] - 2026-06-13
 
 ### Fixed

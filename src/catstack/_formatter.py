@@ -45,6 +45,11 @@ def _check_dependencies():
 def _check_dependencies_installed() -> bool:
     """Pure check — returns True if all formatter deps import successfully.
     No side effects, no install attempts."""
+    # If a dep was just pip-installed in this process's lifetime, the import
+    # system may have cached its earlier absence; clear that so the re-check
+    # actually sees the freshly-installed package.
+    import importlib
+    importlib.invalidate_caches()
     try:
         import torch  # noqa: F401
         import transformers  # noqa: F401
@@ -165,7 +170,31 @@ def _ensure_dependencies(verbose: bool = True) -> bool:
             "  To skip this and disable the formatter, pass json_formatter=False."
         )
 
-    return _install_dependencies(verbose=verbose)
+    ok = _install_dependencies(verbose=verbose)
+    if not ok:
+        # Freshly pip-installed packages (esp. compiled ones like torch) often
+        # cannot be imported by the SAME running process — but they ARE on disk
+        # now. Tell the user to re-run rather than silently degrading every row
+        # to an error.
+        if verbose and _deps_on_disk():
+            print(
+                "[CatLLM] Formatter dependencies were just installed but cannot "
+                "be imported into the already-running process. Please RE-RUN your "
+                "command — they will load on the next start. (Avoid this by "
+                "pre-installing: pip install 'cat-stack[formatter]'.)"
+            )
+    return ok
+
+
+def _deps_on_disk() -> bool:
+    """True if the formatter deps are findable on disk (importable in a FRESH
+    process) even if they failed to import in the current one."""
+    import importlib.util
+    try:
+        return all(importlib.util.find_spec(m) is not None
+                   for m in ("torch", "transformers", "accelerate"))
+    except (ImportError, ValueError):
+        return False
 
 
 def _is_model_cached() -> bool:
@@ -205,6 +234,51 @@ def ensure_formatter_available() -> bool:
     return True  # actual download happens in load_formatter()
 
 
+def _load_formatter_tokenizer(AutoTokenizer):
+    """Load the formatter tokenizer, defending against a malformed
+    `tokenizer_config.json`.
+
+    Some published configs store `extra_special_tokens` as a LIST, but
+    transformers 4.56–4.57.x expect a dict and crash in
+    `_set_model_specific_special_tokens` with
+    `'list' object has no attribute 'keys'`. On that failure we snapshot the
+    repo locally, normalize a list-valued `extra_special_tokens` to `{}`
+    (the tokens already live in `added_tokens`/`special_tokens_map`, so
+    dropping the field is lossless), and load from the patched local copy.
+    """
+    try:
+        return AutoTokenizer.from_pretrained(
+            _MERGED_MODEL_REPO, trust_remote_code=True
+        )
+    except (AttributeError, TypeError) as e:
+        if "keys" not in str(e) and "extra_special_tokens" not in str(e):
+            raise
+        import json
+        import os
+        from huggingface_hub import snapshot_download
+
+        local_dir = snapshot_download(_MERGED_MODEL_REPO)
+        cfg_path = os.path.join(local_dir, "tokenizer_config.json")
+        with open(cfg_path) as f:
+            cfg = json.load(f)
+        if isinstance(cfg.get("extra_special_tokens"), list):
+            cfg["extra_special_tokens"] = {}
+            # snapshot dirs are often read-only symlink caches; patch a copy.
+            import tempfile
+            import shutil
+            patched = tempfile.mkdtemp(prefix="catllm_formatter_tok_")
+            for fn in os.listdir(local_dir):
+                src = os.path.join(local_dir, fn)
+                if os.path.isfile(src):
+                    shutil.copy(src, os.path.join(patched, fn))
+            with open(os.path.join(patched, "tokenizer_config.json"), "w") as f:
+                json.dump(cfg, f)
+            print("[CatLLM] Patched malformed extra_special_tokens in the "
+                  "formatter tokenizer config (list -> {}).")
+            return AutoTokenizer.from_pretrained(patched, trust_remote_code=True)
+        raise
+
+
 def load_formatter(device=None):
     """
     Load the merged formatter model and tokenizer.
@@ -230,15 +304,21 @@ def load_formatter(device=None):
     dtype = torch.float16 if device == "cuda" else torch.float32
 
     print(f"[CatLLM] Loading JSON formatter on {device}...")
-    tokenizer = AutoTokenizer.from_pretrained(
-        _MERGED_MODEL_REPO, trust_remote_code=True
-    )
+    tokenizer = _load_formatter_tokenizer(AutoTokenizer)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(
-        _MERGED_MODEL_REPO, dtype=dtype, trust_remote_code=True
-    )
+    # `dtype=` is the transformers >=4.56 kwarg; older versions only accept
+    # `torch_dtype=` and crash if `dtype=` leaks into the config. Try the new
+    # name, fall back to the old one.
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            _MERGED_MODEL_REPO, dtype=dtype, trust_remote_code=True
+        )
+    except TypeError:
+        model = AutoModelForCausalLM.from_pretrained(
+            _MERGED_MODEL_REPO, torch_dtype=dtype, trust_remote_code=True
+        )
     model = model.to(device)
     model.eval()
 
@@ -281,7 +361,9 @@ def run_formatter(raw_output, categories, model, tokenizer, device):
     with torch.no_grad():
         out = model.generate(
             **inputs,
-            max_new_tokens=128,
+            # 512 (was 128): a large category set produces a long N-key JSON
+            # object; 128 tokens truncated it for 28/48-category tasks.
+            max_new_tokens=512,
             do_sample=False,
             temperature=None,
             top_p=None,
