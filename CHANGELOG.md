@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.8] - 2026-06-13
+
+### Fixed
+- **Google reasoning control was silently absent at `thinking_budget=0`.**
+  The Gemini payload builder only attached `thinkingConfig` when the budget
+  was positive, so an "off" request sent nothing and Gemini ran at its
+  provider default — measured (2026-06-12 reasoning audit) as thinking ON
+  (~200+ thought tokens per trivial classification call) for Gemini 3.5
+  Flash and 3.1 Pro. The builder now sends an explicit
+  `thinkingConfig: {thinkingBudget: 0}`; tiers that reject 0 trigger a 400
+  fallback in `complete()` that retries at Google's stated minimum (128)
+  and caches the floor on the client (`_google_thinking_floor`).
+- **xAI received no reasoning control at all.** `_build_payload` dropped
+  `thinking_budget` for the xai provider; default-reasoning hybrids
+  (grok-4.3+) therefore reasoned on every call (audit: 214 reasoning
+  tokens on a probe). xai now forwards the request as
+  `reasoning_effort: "low"` at budget 0 and `"high"` above; variants that
+  400 on the field are handled by the existing fallback, now extended to
+  cache the rejection (`_xai_no_reasoning_effort`). Two verified caveats
+  (2026-06-13): (a) grok-4.3 accepts `reasoning_effort: "low"` but ignores
+  it (206 reasoning tokens with or without); (b) for `*-non-reasoning`
+  variants the field is WITHHELD entirely — sending `low` paradoxically
+  turns reasoning back ON (0 tokens without the field, 207 with), so the
+  builder skips reasoning_effort whenever the model name contains
+  "non-reasoning". Net: on xAI, reasoning is controlled by model-variant
+  choice, not by parameter. See docs/reasoning-controls.md.
+- **Gemini constrained-decoding hang on specific inputs.** A strict
+  `responseSchema` can make Gemini reproducibly time out on particular
+  inputs (audit: a trivial response timed out 6/6 attempts with the
+  schema attached and answered instantly without it). After two
+  consecutive timeouts with a schema attached, `complete()` now drops the
+  schema once and re-asks; `extract_json()` parses the JSON from the
+  free-text reply.
+
+### Added
+- **One-time warning for uncontrollable reasoning.** HuggingFace-routed
+  models that reason by default and honor no off-switch through the
+  router (`openai/gpt-oss-*`, `moonshotai/Kimi-K2*` — the router
+  400-rejects `enable_thinking` for their templates) now print a one-time
+  warning that the provider's default reasoning behavior applies, instead
+  of silently not delivering the requested "off". See
+  `docs/reasoning-controls.md`.
+- `docs/reasoning-controls.md`: per-provider table of what
+  `thinking_budget = 0` actually delivers, with the 2026-06-12 audit
+  methodology (reasoning-token usage probes).
+
 ## [1.6.7] - 2026-06-11
 
 ### Fixed

@@ -41,3 +41,11 @@ survey-summarizer
 # R package build/check artifacts
 *.Rcheck/
 *.tar.gz
+
+# Local experiment scratch (not part of the package)
+/patches/
+/AGENTS.md
+/test_live_*.py
+/test_smoke_*.py
+/test_stress_*.py
+/test_parallel_*.py

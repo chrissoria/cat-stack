@@ -126,6 +126,27 @@ def _hf_model_needs_enable_thinking_off(model: str) -> bool:
     return any(model.startswith(p) for p in _HF_NEEDS_ENABLE_THINKING_OFF)
 
 
+# Router-served models measured (2026-06-12 reasoning audit) to reason by
+# default with NO honored off-switch through the OpenAI-compatible router:
+# the router 400-rejects `chat_template_kwargs.enable_thinking` for their
+# templates, and they expose no reasoning_effort. classify() warns once per
+# client so users know the provider default applies.
+_HF_DEFAULT_REASONING_PREFIXES = (
+    "openai/gpt-oss",
+    "moonshotai/kimi-k2",
+)
+
+
+def _hf_model_reasons_by_default(model: str) -> bool:
+    m = (model or "").lower()
+    return any(m.startswith(p) for p in _HF_DEFAULT_REASONING_PREFIXES)
+
+
+# Module-level: models already warned about uncontrolled reasoning, so the
+# warning fires once per process even though a fresh client is built per row.
+_WARNED_UNCONTROLLED_REASONING: set = set()
+
+
 # ---------------------------------------------------------------------------
 # Anthropic deprecated the `temperature` parameter starting with the Opus 4.7 /
 # 4.8 generation: these models return 400 "`temperature` is deprecated for this
@@ -545,8 +566,15 @@ class UnifiedLLMClient:
             # accept booleans). Without this, gpt-oss family models emit long
             # <think> blocks by default that bloat per-row generation 3-5x.
             return self._build_openai_payload(messages, json_schema, creativity, force_json, thinking_budget)
+        elif self.provider == "xai":
+            # v1.6.8: forward the reasoning request. grok-4.3+ hybrids reason
+            # by default (2026-06-12 audit: 214 reasoning tokens on a trivial
+            # probe with no control sent); non-reasoning variants reject
+            # reasoning_effort and are handled by the 400 fallback in
+            # complete(), which caches the rejection on the client.
+            return self._build_openai_payload(messages, json_schema, creativity, force_json, thinking_budget)
         else:
-            # Other OpenAI-compatible providers (xai, mistral, etc.)
+            # Other OpenAI-compatible providers (mistral, etc.)
             return self._build_openai_payload(messages, json_schema, creativity, force_json)
 
     def _build_openai_payload(
@@ -620,6 +648,25 @@ class UnifiedLLMClient:
         elif creativity is not None:
             payload["temperature"] = creativity
 
+        # xAI (v1.6.8): hybrid grok models accept reasoning_effort alongside
+        # temperature. "low" is the lowest tier xAI exposes (no "none" /
+        # "minimal"); explicitly non-reasoning variants 400 on the field —
+        # complete() pops it and caches `_xai_no_reasoning_effort` so later
+        # rows on this client skip the doomed field up front.
+        if (
+            self.provider == "xai"
+            and thinking_budget is not None
+            and not getattr(self, "_xai_no_reasoning_effort", False)
+            # Variants whose name already encodes "non-reasoning" are off by
+            # model choice; sending reasoning_effort to them is not just
+            # redundant but HARMFUL — verified 2026-06-13 that
+            # grok-4-1-fast-non-reasoning returns 0 reasoning tokens with no
+            # field but 207 when sent reasoning_effort="low", i.e. the field
+            # turns reasoning back ON. Leave these alone.
+            and "non-reasoning" not in (self.model or "").lower()
+        ):
+            payload["reasoning_effort"] = "low" if thinking_budget == 0 else "high"
+
         # Ollama: per-model-family reasoning control via the top-level
         # `think` field. gpt-oss expects an enum ("low"/"medium"/"high");
         # qwen3/deepseek-r1 expect a boolean. Models not in the
@@ -648,6 +695,24 @@ class UnifiedLLMClient:
             and _hf_model_needs_enable_thinking_off(self.model)
         ):
             payload["chat_template_kwargs"] = {"enable_thinking": False}
+        elif (
+            self.provider in ("huggingface", "huggingface-together")
+            and thinking_budget == 0
+            and _hf_model_reasons_by_default(self.model)
+            and self.model not in _WARNED_UNCONTROLLED_REASONING
+        ):
+            # v1.6.8: these router-served models reason by default and honor
+            # no off-switch through the router (enable_thinking is
+            # 400-rejected for their templates). Warn once per process (a
+            # fresh client is built per row, so a per-instance flag would
+            # warn every row) so the uniform "reasoning off" request isn't
+            # silently unmet.
+            print(
+                f"\n[CatLLM] WARNING: no effective reasoning control delivered "
+                f"for '{self.model}'; the provider's default reasoning "
+                f"behavior applies. See docs/reasoning-controls.md.\n"
+            )
+            _WARNED_UNCONTROLLED_REASONING.add(self.model)
 
         return payload
 
@@ -759,11 +824,19 @@ class UnifiedLLMClient:
         if creativity is not None:
             payload["generationConfig"]["temperature"] = creativity
 
-        # Add thinking budget for extended thinking (Google-specific)
-        # Must be inside generationConfig, not at top level
-        # Google requires a reasonable minimum budget (enforce 128 tokens minimum)
-        if thinking_budget and thinking_budget > 0:
-            budget = max(thinking_budget, 128)
+        # Reasoning control (Google-specific). Must be inside generationConfig.
+        # v1.6.8: an explicit zero budget is now SENT at thinking_budget = 0.
+        # Previously nothing was sent at 0 and Gemini ran at its provider
+        # default, which the 2026-06-12 audit measured as thinking ON
+        # (~200+ thought tokens on a trivial classification call). Models
+        # that reject 0 (minimum-budget tiers) are handled by the 400
+        # fallback in complete(), which caches the discovered floor on the
+        # client (`_google_thinking_floor`).
+        if thinking_budget is not None:
+            if thinking_budget > 0:
+                budget = max(thinking_budget, 128)
+            else:
+                budget = getattr(self, "_google_thinking_floor", 0)
             payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": budget}
 
         return payload
@@ -946,6 +1019,10 @@ class UnifiedLLMClient:
         # transient error this call? Only strip once per call so we don't
         # mutate payload on every retry tick.
         stripped_response_format = False
+        # v1.6.8: consecutive-timeout counter + one-shot Google schema drop
+        # (see the Timeout handler below).
+        timeout_count = 0
+        dropped_google_schema = False
 
         for attempt in range(max_retries):
             endpoint = self._get_endpoint()
@@ -1019,8 +1096,31 @@ class UnifiedLLMClient:
                             payload["reasoning_effort"] = "low"
                             continue
                         elif current == "low" and "reasoning_effort" in payload:
+                            # Model takes no reasoning_effort at all (e.g.
+                            # xAI's explicitly non-reasoning variants).
+                            # Cache so later rows on this client skip the
+                            # doomed field up front (v1.6.8).
+                            self._xai_no_reasoning_effort = True
                             payload.pop("reasoning_effort")
                             continue
+
+                    # Google (v1.6.8): minimum-budget thinking tiers reject
+                    # thinkingBudget: 0. Fall back to 128 (Google's stated
+                    # minimum) and cache on the client.
+                    if (
+                        self.provider == "google"
+                        and "thinking" in error_text
+                        and ("budget" in error_text or "invalid" in error_text
+                             or "unsupported" in error_text)
+                        and payload.get("generationConfig", {})
+                                   .get("thinkingConfig", {})
+                                   .get("thinkingBudget") == 0
+                    ):
+                        self._google_thinking_floor = 128
+                        payload["generationConfig"]["thinkingConfig"]["thinkingBudget"] = 128
+                        print(f"\n[CatLLM] Model '{self.model}' rejected thinkingBudget=0; "
+                              f"falling back to the minimum (128) and caching for this client.\n")
+                        continue
 
                     # Anthropic deprecated `temperature` for newer models
                     # (Opus 4.7+): they 400 with "`temperature` is deprecated
@@ -1113,6 +1213,27 @@ class UnifiedLLMClient:
                 return result, None
 
             except requests.exceptions.Timeout:
+                timeout_count += 1
+                # v1.6.8: Gemini can reproducibly hang on specific inputs
+                # when a strict responseSchema is attached (constrained-
+                # decoding pathology; 2026-06-12 audit — a trivial input
+                # timed out 6/6 attempts WITH the schema and answered
+                # instantly without it). After two consecutive timeouts with
+                # a schema attached, drop the schema once and re-ask: the
+                # prompt still requests JSON and extract_json() parses it
+                # from the free-text response.
+                if (
+                    self.provider == "google"
+                    and timeout_count >= 2
+                    and not dropped_google_schema
+                    and "responseSchema" in payload.get("generationConfig", {})
+                ):
+                    dropped_google_schema = True
+                    payload["generationConfig"].pop("responseSchema", None)
+                    print(f"[CatLLM] Repeated timeouts from '{self.model}' with "
+                          f"responseSchema attached; retrying schema-less "
+                          f"(prompt-based JSON parsing).")
+                    continue
                 wait_time = _backoff_with_jitter(initial_delay, attempt)
                 elapsed = time.monotonic() - start
                 if attempt < max_retries - 1 and elapsed + wait_time <= max_total_wait:
