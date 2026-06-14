@@ -18,6 +18,7 @@ from .__about__ import (
 # Main entry points
 from .extract import extract
 from .explore import explore
+from .collapse_themes import collapse_themes
 from .classify import classify
 from .summarize import summarize
 from .prompt_tune import prompt_tune
@@ -103,6 +104,7 @@ __all__ = [
     # Main entry points
     "extract",
     "explore",
+    "collapse_themes",
     "classify",
     "summarize",
     "prompt_tune",
