@@ -287,6 +287,7 @@ def collapse_themes(
     dedupe_threshold=0.95,
     embedding_merge_threshold=0.92,
     shuffle=True,
+    final_consolidation=0.82,
     user_model="gpt-4o",
     model_source="auto",
     creativity=0,
@@ -339,6 +340,12 @@ def collapse_themes(
             0.92. None or >=1.0 skips embeddings.
         shuffle (bool): Randomize order each pass so batch composition varies.
             Default True (improves convergence stability).
+        final_consolidation (float): Cosine threshold for one greedy embedding
+            re-merge over the whole result after all passes, collapsing cross-batch
+            lexical-sibling duplicates that batched passes (and the auto loop) cannot
+            reach. Default 0.82 — deterministic and tuned to land just above the true
+            concept count (errs toward keeping categories; over-segmentation is
+            preferred over over-consolidation). False/None skips.
         user_model (str): Model name. Default "gpt-4o". Use a capable model —
             small models can degenerate into repetition.
         model_source (str): Provider — "auto", "openai", "huggingface", etc.
@@ -408,6 +415,21 @@ def collapse_themes(
             current = _pass(current, p)
             if progress_callback:
                 progress_callback(p + 1, int(passes), "collapse_themes")
+
+    # Final global consolidation. Batched passes (and the auto loop) can only merge
+    # labels that share a batch, so cross-batch lexical siblings — e.g. "tension" vs
+    # "estrangement", which restate one concept but embed below the per-pass dedupe
+    # threshold — survive as separate themes, inflating the count above the true
+    # number of concepts. This applies one greedy embedding re-merge over the WHOLE
+    # result at a lower threshold, dropping each label that restates an already-kept
+    # one to bring the count closer to truth. Greedy (compares only against kept
+    # representatives, no transitive chaining) avoids blobbing related-but-distinct
+    # labels. It is deterministic (no extra LLM call, model-independent at decision
+    # time) and tuned to land just above the true count, so it errs toward KEEPING
+    # categories — over-segmentation is the preferred failure mode, not
+    # over-consolidation. Set final_consolidation=False to skip.
+    if final_consolidation and len(current) > 1:
+        current = _embedding_merge(current, final_consolidation)
 
     if filename:
         pd.DataFrame({"category": current}).to_csv(filename, index=False)

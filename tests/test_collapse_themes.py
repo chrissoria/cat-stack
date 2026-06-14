@@ -50,8 +50,11 @@ def test_no_data_loss_on_error(mock_cls, mock_dp):
     mock_cls.return_value = inst
 
     themes = [f"category {i}" for i in range(50)]
+    # Disable every merge step (pre-LLM embedding, JW dedupe, and the final global
+    # consolidation) so this isolates the error path: on a failed batch nothing dropped.
     out = collapse_themes(themes, api_key="k", passes=1, batch_size=40,
-                          embedding_merge_threshold=None, dedupe_threshold=1.0, shuffle=False)
+                          embedding_merge_threshold=None, dedupe_threshold=1.0,
+                          final_consolidation=False, shuffle=False)
     # On error a batch is returned unchanged -> nothing is dropped
     assert len(out) == 50
 
