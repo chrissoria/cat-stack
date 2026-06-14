@@ -70,17 +70,21 @@ def _jw_dedupe(items, threshold):
     return out
 
 
-def _embedding_merge(items, threshold):
-    """Greedy embedding clustering: drop labels whose cosine similarity to an
-    already-kept label is >= threshold. Keeps the first-seen representative.
-    Uses cat-stack's canonical BAAI/bge-small model (cached)."""
+def _get_emb_model():
+    """Load (once) and return cat-stack's canonical BAAI/bge-small embedder."""
     global _EMB_MODEL
-    if not threshold or threshold >= 1.0 or len(items) < 2:
-        return items
     if _EMB_MODEL is None:
         from ._embeddings import load_embedding_model
         _EMB_MODEL = load_embedding_model()
-    embs = _EMB_MODEL.encode(items, normalize_embeddings=True, show_progress_bar=False)
+    return _EMB_MODEL
+
+
+def _embedding_merge(items, threshold):
+    """Greedy embedding clustering: drop labels whose cosine similarity to an
+    already-kept label is >= threshold. Keeps the first-seen representative."""
+    if not threshold or threshold >= 1.0 or len(items) < 2:
+        return items
+    embs = _get_emb_model().encode(items, normalize_embeddings=True, show_progress_bar=False)
     reps, rep_embs = [], []
     for it, e in zip(items, embs):
         if rep_embs and float(np.max(np.asarray(rep_embs) @ e)) >= threshold:
@@ -88,6 +92,29 @@ def _embedding_merge(items, threshold):
         reps.append(it)
         rep_embs.append(e)
     return reps
+
+
+def _quality(output, raw_embs, tau_cov=0.70, tau_red=0.85, beta=2.0):
+    """Deterministic quality of a candidate taxonomy vs the raw input themes:
+    coverage-weighted F-beta of recall=coverage_hard (share of raw within tau_cov
+    of some output) and precision=(1 - redundancy_rate) (share of outputs with a
+    near-twin >= tau_red). Embedding-only — the convergence signal for passes='auto'.
+    """
+    if not output:
+        return 0.0
+    O = _get_emb_model().encode(list(output), normalize_embeddings=True, show_progress_bar=False)
+    coverage = float(((raw_embs @ O.T).max(axis=1) >= tau_cov).mean())
+    if len(output) > 1:
+        OO = O @ O.T
+        np.fill_diagonal(OO, -1.0)
+        redundancy = float((OO.max(axis=1) >= tau_red).mean())
+    else:
+        redundancy = 0.0
+    precision = 1.0 - redundancy
+    if coverage <= 0 or precision <= 0:
+        return 0.0
+    b2 = beta * beta
+    return (1 + b2) * precision * coverage / (b2 * precision + coverage)
 
 
 def _collapse_batch(client, batch, description, creativity, mode="unique"):
@@ -254,6 +281,7 @@ def collapse_themes(
     api_key=None,
     description="",
     passes=1,
+    max_passes=10,
     batch_size=40,
     aggressive=False,
     dedupe_threshold=0.95,
@@ -296,7 +324,10 @@ def collapse_themes(
         description (str): Data/question context, injected into the prompt — e.g.
             the survey question the categories came from. Helps the model judge
             which distinctions matter.
-        passes (int): Number of collapse iterations to run. Default 1.
+        passes (int | str): Number of collapse iterations, or "auto" to iterate
+            until the deterministic quality benchmark peaks (the recommended mode
+            for a final taxonomy — pair with aggressive=True). Default 1.
+        max_passes (int): Cap on iterations when passes="auto". Default 10.
         batch_size (int): Themes per LLM chunk (ceil(n / batch_size) calls per
             pass). Default 40.
         aggressive (bool): If True, use the conceptual-merge prompt (compress);
@@ -325,11 +356,11 @@ def collapse_themes(
         >>> import cat_stack as cat
         >>> themes = cat.explore(df['responses'], description="Why did you move?",
         ...                      api_key=key)
-        >>> # 1) thin faithfully, then 2) compress
-        >>> thinned = cat.collapse_themes(themes, api_key=key,
-        ...     description="Why did you move?", passes=10, max_workers=8)
-        >>> final = cat.collapse_themes(thinned, api_key=key,
-        ...     description="Why did you move?", passes=2, aggressive=True)
+        >>> # Recommended: aggressive merge, auto-stop at the quality peak
+        >>> taxonomy = cat.collapse_themes(
+        ...     themes, api_key=key, description="Why did you move?",
+        ...     aggressive=True, passes="auto", max_workers=8,
+        ... )
     """
     if not api_key:
         raise ValueError("collapse_themes() needs an api_key for the LLM call.")
@@ -338,24 +369,45 @@ def collapse_themes(
     provider = detect_provider(user_model, model_source)
     client = UnifiedLLMClient(provider=provider, api_key=api_key, model=user_model)
 
-    current = input_data
-    for p in range(passes):
-        seed = None if random_state is None else random_state + p
-        current = _collapse_once(
-            client,
-            current,
+    def _pass(items, p):
+        return _collapse_once(
+            client, items,
             description=description,
             batch_size=batch_size,
             dedupe_threshold=dedupe_threshold,
             embedding_merge_threshold=embedding_merge_threshold,
             mode=mode,
             shuffle=shuffle,
-            random_state=seed,
+            random_state=(None if random_state is None else random_state + p),
             creativity=creativity,
             max_workers=max_workers,
         )
-        if progress_callback:
-            progress_callback(p + 1, passes, "collapse_themes")
+
+    current = input_data
+    if passes == "auto":
+        # Iterate until the deterministic quality benchmark stops improving (the
+        # peak), capped at max_passes. Quality is scored vs the ORIGINAL input
+        # themes — embedding-only, model-independent at decision time. The peak is
+        # the principled stop (validated across surveys and list sizes).
+        raw_embs = _get_emb_model().encode(
+            list(_to_counts(input_data).keys()), normalize_embeddings=True,
+            show_progress_bar=False,
+        )
+        best, best_q = None, -1.0
+        for p in range(max_passes):
+            current = _pass(current, p)
+            q = _quality(current, raw_embs)
+            if progress_callback:
+                progress_callback(p + 1, max_passes, "collapse_themes")
+            if q < best_q:
+                break  # quality dropped -> the previous pass was the peak
+            best, best_q = current, q
+        current = best if best is not None else current
+    else:
+        for p in range(int(passes)):
+            current = _pass(current, p)
+            if progress_callback:
+                progress_callback(p + 1, int(passes), "collapse_themes")
 
     if filename:
         pd.DataFrame({"category": current}).to_csv(filename, index=False)

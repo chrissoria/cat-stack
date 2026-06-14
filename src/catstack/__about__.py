@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2025-present Christopher Soria <chrissoria@berkeley.edu>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
-__version__ = "2.0.0b1"
+__version__ = "2.0.0b2"
 __author__ = "Chris Soria"
 __email__ = "chrissoria@berkeley.edu"
 __title__ = "cat-stack"
