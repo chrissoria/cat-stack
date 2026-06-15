@@ -118,6 +118,67 @@ cat.explore(
 )
 ```
 
+### `collapse_themes()`
+Consolidate a long, redundant list of extracted category labels (e.g. the output of `explore()`) into a smaller, deduplicated taxonomy. Runs the semantic merge iteratively, then applies a single deterministic embedding re-merge over the whole result to collapse cross-batch lexical siblings (e.g. "tension" / "estrangement") that batched passes leave separate. Tuned to err toward over-segmentation (keeping categories) rather than over-merging.
+
+```python
+# Basic: aggressive merge, auto-stop at the quality peak
+cat.collapse_themes(
+    input_data=raw_labels,            # list[str] or a frequency Series/dict
+    api_key=key,
+    description="Why did you move?",   # the survey question / context
+    aggressive=True,
+    passes="auto",
+    user_model="gpt-4o",
+)
+```
+
+```python
+# Per-step model assignment: a cheap model thins restatements,
+# a stronger model does the conceptual merge (providers can differ)
+cat.collapse_themes(
+    input_data=raw_labels,
+    api_key=key,
+    description="Why did you move?",
+    aggressive=True,
+    passes="auto",
+    unique_model="Qwen/Qwen2.5-72B-Instruct:together",
+    unique_model_source="huggingface",
+    unique_passes=1,
+    merge_model="Qwen/Qwen3.6-35B-A3B:together",
+    merge_model_source="huggingface",
+    max_workers=8,
+)
+```
+
+**Parameters**
+
+| Parameter | Default | Description |
+| --- | --- | --- |
+| `input_data` | — | List of category labels, or a frequency `Series`/`dict` (`label -> count`). |
+| `api_key` | `None` | API key for the LLM provider (required). |
+| `description` | `""` | The survey question or context, used in the merge prompt. |
+| `passes` | `1` | Number of merge iterations, or `"auto"` to iterate until the embedding-quality benchmark peaks. |
+| `max_passes` | `10` | Cap on iterations when `passes="auto"`. |
+| `batch_size` | `40` | Labels per LLM chunk (`ceil(n / batch_size)` calls per pass). |
+| `aggressive` | `False` | `True` = conceptual-merge prompt (compress related labels); `False` = extract-unique (faithful thinning, removes restatements only). |
+| `dedupe_threshold` | `0.95` | Jaro-Winkler similarity at/above which normalized labels are deduped (`1.0` = exact only). |
+| `embedding_merge_threshold` | `0.92` | Cosine similarity at/above which labels are merged in the pre-LLM embedding step. `None`/`>=1.0` disables it. |
+| `shuffle` | `True` | Randomize order each pass so batch composition varies (improves convergence stability). |
+| `final_consolidation` | `0.82` | Cosine threshold for one greedy global embedding re-merge after all passes, collapsing cross-batch duplicates. Conservative by design (errs toward keeping categories). `False`/`None` skips it. |
+| `user_model` | `"gpt-4o"` | Model for the merge phase. Use a capable model — small models can degenerate. |
+| `model_source` | `"auto"` | Provider for `user_model` (`"auto"`, `"openai"`, `"huggingface"`, …). |
+| `unique_model` | `None` | If set, run an initial extract-unique thinning phase on this (typically cheaper) model before the merge phase. `None` skips the phase (backward compatible). |
+| `unique_model_source` | `"auto"` | Provider for `unique_model` — can differ from the merge phase. |
+| `unique_passes` | `1` | Number of thinning passes when `unique_model` is set. |
+| `merge_model` | `None` | Model for the merge phase; falls back to `user_model` when `None`. |
+| `merge_model_source` | `"auto"` | Provider for `merge_model`. |
+| `creativity` | `0` | Temperature (`0` = deterministic). |
+| `max_workers` | `1` | Batches processed concurrently per pass. |
+| `random_state` | `None` | Seed for shuffling (per-pass seed = `random_state + pass`). |
+| `filename` | `None` | Optional CSV path to save the final list. |
+| `progress_callback` | `None` | Optional `callback(pass, passes, label)` for progress reporting. |
+
 ### `summarize()`
 Summarize text or PDF documents, with optional multi-model ensemble.
 
