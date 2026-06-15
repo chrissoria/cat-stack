@@ -290,6 +290,11 @@ def collapse_themes(
     final_consolidation=0.82,
     user_model="gpt-4o",
     model_source="auto",
+    unique_model=None,
+    unique_model_source="auto",
+    unique_passes=1,
+    merge_model=None,
+    merge_model_source="auto",
     creativity=0,
     max_workers=1,
     random_state=None,
@@ -346,9 +351,22 @@ def collapse_themes(
             reach. Default 0.82 — deterministic and tuned to land just above the true
             concept count (errs toward keeping categories; over-segmentation is
             preferred over over-consolidation). False/None skips.
-        user_model (str): Model name. Default "gpt-4o". Use a capable model —
-            small models can degenerate into repetition.
+        user_model (str): Model name for the merge phase. Default "gpt-4o". Use a
+            capable model — small models can degenerate into repetition.
         model_source (str): Provider — "auto", "openai", "huggingface", etc.
+        unique_model (str): If set, run an initial extract-unique thinning phase on
+            this (typically cheaper) model before the merge phase, allocating model
+            spend by task difficulty: a smaller model handles faithful restatement
+            removal, a stronger one handles conceptual merging. None (default) skips
+            the phase entirely (backward compatible). Recommended pairing:
+            unique_model = a 72B-class model, merge_model = a frontier model.
+        unique_model_source (str): Provider for unique_model. Default "auto" — can
+            differ from the merge phase, so the two phases may sit on different
+            providers.
+        unique_passes (int): Number of extract-unique passes in the thinning phase
+            when unique_model is set. Default 1.
+        merge_model (str): Model for the merge phase. Defaults to user_model when None.
+        merge_model_source (str): Provider for merge_model. Default "auto".
         creativity (float): Temperature. Default 0 (deterministic).
         max_workers (int): Batches processed concurrently per pass. Default 1.
         random_state (int): Seed for shuffling (per-pass seed = random_state + p).
@@ -373,24 +391,47 @@ def collapse_themes(
         raise ValueError("collapse_themes() needs an api_key for the LLM call.")
 
     mode = "merge" if aggressive else "unique"
-    provider = detect_provider(user_model, model_source)
-    client = UnifiedLLMClient(provider=provider, api_key=api_key, model=user_model)
 
-    def _pass(items, p):
+    # The main (merge) phase runs on merge_model if given, else user_model. A separate
+    # cheaper model can handle the simpler unique-keeping phase via unique_model — per
+    # step the work differs in difficulty (faithful thinning is easy, conceptual
+    # merging is hard), so model spend can be allocated accordingly. Each phase
+    # resolves its own provider, so the two can sit on different providers.
+    merge_name = merge_model or user_model
+    merge_src = merge_model_source if merge_model else model_source
+    merge_provider = detect_provider(merge_name, merge_src)
+    client = UnifiedLLMClient(provider=merge_provider, api_key=api_key, model=merge_name)
+
+    def _run(cl, items, md, p):
         return _collapse_once(
-            client, items,
+            cl, items,
             description=description,
             batch_size=batch_size,
             dedupe_threshold=dedupe_threshold,
             embedding_merge_threshold=embedding_merge_threshold,
-            mode=mode,
+            mode=md,
             shuffle=shuffle,
             random_state=(None if random_state is None else random_state + p),
             creativity=creativity,
             max_workers=max_workers,
         )
 
+    def _pass(items, p):
+        return _run(client, items, mode, p)
+
     current = input_data
+
+    # Phase 1 (optional): cheap unique-keeping thin. When unique_model is set, run
+    # `unique_passes` extract-unique passes on a separate (typically smaller, cheaper)
+    # model to strip restatement-level duplicates before the expensive merge phase.
+    # Skipped entirely when unique_model is None (fully backward compatible).
+    if unique_model:
+        u_provider = detect_provider(unique_model, unique_model_source)
+        u_client = UnifiedLLMClient(provider=u_provider, api_key=api_key, model=unique_model)
+        for p in range(int(unique_passes)):
+            current = _run(u_client, current, "unique", p)
+            if progress_callback:
+                progress_callback(p + 1, int(unique_passes), "collapse_themes:unique")
     if passes == "auto":
         # Iterate until the deterministic quality benchmark stops improving (the
         # peak), capped at max_passes. Quality is scored vs the ORIGINAL input
