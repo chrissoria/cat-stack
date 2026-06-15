@@ -333,6 +333,14 @@ def _detect_huggingface_endpoint(api_key: str, model: str, skip: set = None) -> 
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
+        # Match the main request path: featherless's WAF 403s the default
+        # python-requests agent, which would make this probe wrongly skip a
+        # working endpoint.
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
     }
     payload = {
         "model": clean_model,
@@ -526,7 +534,19 @@ class UnifiedLLMClient:
 
     def _get_headers(self) -> dict:
         """Build request headers for the provider."""
-        headers = {"Content-Type": "application/json"}
+        # Send a browser-like User-Agent. Some providers fronted by a WAF
+        # (notably the HuggingFace router's featherless-ai backend) intermittently
+        # 403 the default `python-requests/x.y` agent via a Cloudflare bot rule,
+        # which surfaces as spurious classification failures. A standard UA is
+        # accepted everywhere and costs nothing on providers that don't care.
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+        }
         auth_header = self.config["auth_header"]
         auth_prefix = self.config["auth_prefix"]
 

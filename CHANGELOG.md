@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0b5] - 2026-06-15
+
+### Fixed
+- **Spurious classification failures on WAF-fronted providers (notably the
+  HuggingFace router's `featherless-ai` backend).** Requests were sent with no
+  explicit `User-Agent`, so `requests` defaulted to `python-requests/x.y`,
+  which featherless's Cloudflare bot rule intermittently 403s — surfacing as
+  rows with `processing_status="error"` even though the API key, endpoint, and
+  model were all correct (verified: default agent 0/15 success, browser agent
+  15/15 on identical rapid calls). Both request paths now send a browser
+  `User-Agent`: the main classification call (`_get_headers`) and the
+  provider-detection probe (`_detect_huggingface_endpoint`). Harmless on
+  providers that don't inspect the agent.
+
 ## [1.6.9] - 2026-06-13
 
 ### Fixed
