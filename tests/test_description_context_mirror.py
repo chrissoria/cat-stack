@@ -68,3 +68,36 @@ class TestDescriptionMirror:
         kw = _classify()
         assert kw["survey_question"] == ""
         assert kw["input_description"] == ""
+
+
+class TestResolveHelper:
+    """prompt_tune() shares the same reconciliation via
+    _resolve_description_context — test the helper directly (prompt_tune's
+    interactive tuning loop is too heavy to drive in a unit test)."""
+
+    def _resolve(self, description, survey_question):
+        from cat_stack._utils import _resolve_description_context
+        return _resolve_description_context(description, survey_question, "prompt_tune")
+
+    def test_description_mirrors_to_survey_question(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            assert self._resolve("Why?", "") == ("Why?", "Why?")
+
+    def test_survey_question_mirrors_and_warns(self):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            assert self._resolve("", "Why?") == ("Why?", "Why?")
+        assert any(
+            issubclass(x.category, DeprecationWarning)
+            and "prompt_tune()" in str(x.message)
+            for x in w
+        )
+
+    def test_both_kept_distinct(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            assert self._resolve("ctx", "Why?") == ("ctx", "Why?")
+
+    def test_neither_stays_empty(self):
+        assert self._resolve("", "") == ("", "")

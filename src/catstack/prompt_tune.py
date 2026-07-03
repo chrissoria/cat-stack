@@ -186,19 +186,15 @@ def prompt_tune(
         ...     system_prompt=result["system_prompt"],
         ... )
     """
-    # `description` is the canonical content-neutral way to describe the
-    # data; `survey_question` is a soft-deprecated alias kept working for
-    # legacy callers.
-    if survey_question:
-        warnings.warn(
-            "`survey_question=` is deprecated in prompt_tune(); use "
-            "`description=` instead. The value will be mirrored to "
-            "`description` for now.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if not description:
-            description = survey_question
+    # Reconcile the canonical `description=` with the deprecated
+    # `survey_question=` (each is mirrored into the other when only one is
+    # given — see _resolve_description_context for the full rules). Without
+    # the description->survey_question direction, description-only callers
+    # ran the whole tuning loop with no "Context:" line in the prompts.
+    from ._utils import _resolve_description_context
+    description, survey_question = _resolve_description_context(
+        description, survey_question, "prompt_tune"
+    )
 
     # Build models list
     if models is None:

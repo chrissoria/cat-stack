@@ -5,6 +5,19 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2026-07-03
+
+### Fixed
+- **`prompt_tune(description=...)` ran the whole tuning loop with no prompt
+  context.** Same gap as the `classify()` fix in 2.0.0: `description` is the
+  documented canonical param, but the tuning prompts' "Context:" line keys
+  off `survey_question` downstream. The reconciliation now lives in one
+  shared helper (`_resolve_description_context`) used by both entry points:
+  only-`survey_question` → DeprecationWarning + mirrored to `description`;
+  only-`description` → mirrored to `survey_question`; both → kept distinct.
+  `explore()` and `summarize()` were audited and already route `description`
+  correctly.
+
 ## [2.0.0] - 2026-07-03
 
 First stable release of the 2.0 line — promotes 2.0.0b1–2.0.0b6 (theme

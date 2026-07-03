@@ -437,29 +437,13 @@ def classify(
         ...     consensus_threshold="unanimous",  # or "majority", "two-thirds", or 0.75
         ... )
     """
-    # `description` is the canonical content-neutral way to describe the
-    # data; `survey_question` is a soft-deprecated alias kept working for
-    # legacy callers (cat-survey, pre-rename notebooks, the ecosystem
-    # docs). Mirror it into `description` if `description` wasn't set, so
-    # downstream prompt assembly only needs to look in one place.
-    if survey_question:
-        warnings.warn(
-            "`survey_question=` is deprecated in classify(); use "
-            "`description=` instead. The value will be mirrored to "
-            "`description` for now.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if not description:
-            description = survey_question
-    elif description:
-        # `description` is the canonical name, but downstream the text-prompt
-        # "Context:" line, the step-back question, and the categories="auto"
-        # requirement all still key off `survey_question`. Mirror it so
-        # description-only callers — including every domain wrapper
-        # (cat-survey, cat-pol, cat-web, cat-ademic) — keep their context
-        # framing instead of silently losing it.
-        survey_question = description
+    # Reconcile the canonical `description=` with the deprecated
+    # `survey_question=` (each is mirrored into the other when only one is
+    # given — see _resolve_description_context for the full rules).
+    from ._utils import _resolve_description_context
+    description, survey_question = _resolve_description_context(
+        description, survey_question, "classify"
+    )
 
     # Build models list
     if models is None:

@@ -9,6 +9,8 @@ import json
 import re
 
 __all__ = [
+    # Param resolution
+    "_resolve_description_context",
     # JSON utilities
     "build_json_schema",
     "validate_classification_json",
@@ -29,6 +31,42 @@ __all__ = [
     "_encode_bytes_to_base64",
     "_extract_page_text",
 ]
+
+
+# =============================================================================
+# Param Resolution
+# =============================================================================
+
+def _resolve_description_context(description, survey_question, fn_name):
+    """Reconcile the canonical `description=` with its deprecated alias
+    `survey_question=` for entry points whose downstream prompt assembly
+    still keys the text-prompt "Context:" line (plus step-back and
+    categories="auto") off `survey_question`.
+
+    Returns the reconciled ``(description, survey_question)`` pair:
+    - only survey_question given -> DeprecationWarning; mirrored into
+      description.
+    - only description given -> mirrored into survey_question so the context
+      framing isn't silently lost (description-only callers include every
+      domain wrapper).
+    - both given -> kept distinct (e.g. cat-vader: survey_question= feed
+      question for the Context line, description= platform context).
+    """
+    import warnings
+
+    if survey_question:
+        warnings.warn(
+            f"`survey_question=` is deprecated in {fn_name}(); use "
+            "`description=` instead. The value will be mirrored to "
+            "`description` for now.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        if not description:
+            description = survey_question
+    elif description:
+        survey_question = description
+    return description, survey_question
 
 
 # =============================================================================
