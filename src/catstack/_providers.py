@@ -1195,7 +1195,7 @@ class UnifiedLLMClient:
                 except FileNotFoundError:
                     return None, (
                         "Claude CLI not found. Install it: "
-                        "https://docs.anthropic.com/en/docs/claude-code"
+                        "https://code.claude.com/docs"
                     )
 
             return None, "Max retries exceeded"

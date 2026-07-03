@@ -5,6 +5,17 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Claude Code CLI provider: install-help URL in the "CLI not found" error
+  updated to the current docs home (`code.claude.com/docs`; the old
+  docs.anthropic.com path still redirects). The integration itself was
+  audited against Claude Code 2.1.197 — all flags (`-p`,
+  `--output-format text`, `--model`, `--system-prompt`) remain valid, and a
+  live classify() run through `model_source="claude-code"` passes on the
+  2.0.1 engine.
+
 ## [2.0.1] - 2026-07-03
 
 ### Fixed
