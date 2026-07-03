@@ -2318,10 +2318,22 @@ def _call_google_multimodal(client, messages, json_schema, creativity, thinking_
         "contents": [{"parts": parts}],
         "generationConfig": {
             "responseMimeType": "application/json",
-            **({"temperature": creativity} if creativity is not None else {}),
-            **({"thinkingConfig": {"thinkingBudget": thinking_budget}} if thinking_budget else {})
         }
     }
+
+    # Sampling + reasoning params via the shared shaper — same shaping as the
+    # text path (_build_google_payload), including sending an explicit zero
+    # budget at thinking_budget=0 (Gemini's default is thinking ON) and the
+    # client's cached thinking floor.
+    from ._providers import apply_model_params
+    apply_model_params(
+        payload,
+        "google",
+        client.model,
+        creativity=creativity,
+        thinking_budget=thinking_budget,
+        overrides=client._param_overrides(),
+    )
 
     for attempt in range(max_retries):
         try:

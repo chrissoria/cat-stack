@@ -376,8 +376,10 @@ Provide the final categorization in the same JSON format:"""
                     "model": user_model,
                     "messages": messages,
                 }
-                if creativity is not None:
-                    payload["temperature"] = creativity
+                # Sampling params via the shared shaper (skips temperature for
+                # OpenAI reasoning models, which reject non-default values).
+                from cat_stack._providers import apply_model_params
+                apply_model_params(payload, model_source or "openai", user_model, creativity=creativity)
 
                 response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
@@ -455,8 +457,10 @@ Provide the final categorization in the same JSON format:"""
                 "max_tokens": 1024,
                 "messages": messages,
             }
-            if creativity is not None:
-                payload["temperature"] = creativity
+            # Sampling params via the shared shaper (skips temperature on Anthropic
+            # models that 400 on it: Opus 4.7+, Sonnet 5, Fable 5).
+            from cat_stack._providers import apply_model_params
+            apply_model_params(payload, "anthropic", user_model, creativity=creativity)
 
             response = req.post(endpoint, headers=headers, json=payload, timeout=120)
             response.raise_for_status()
@@ -538,10 +542,13 @@ Provide the final categorization in the same JSON format:"""
             "contents": [{"parts": parts}],
             "generationConfig": {
                 "responseMimeType": "application/json",
-                **({"temperature": creativity} if creativity is not None else {}),
                 **({"thinkingConfig": {"thinkingBudget": thinking_budget}} if thinking_budget else {})
             }
         }
+        # Sampling params via the shared shaper (temperature goes inside the
+        # top-level generationConfig; thinkingConfig above is left as-is).
+        from cat_stack._providers import apply_model_params
+        apply_model_params(payload, "google", user_model, creativity=creativity)
 
         try:
             result = make_google_request(url, headers, payload)
@@ -607,8 +614,9 @@ Provide the final categorization in the same JSON format:"""
                     "model": user_model,
                     "messages": messages,
                 }
-                if creativity is not None:
-                    payload["temperature"] = creativity
+                # Sampling params via the shared shaper.
+                from cat_stack._providers import apply_model_params
+                apply_model_params(payload, "mistral", user_model, creativity=creativity)
 
                 response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
@@ -945,8 +953,10 @@ def image_score_drawing(
                 "model": user_model,
                 "messages": [{'role': 'user', 'content': prompt}],
             }
-            if creativity is not None:
-                payload["temperature"] = creativity
+            # Sampling params via the shared shaper (skips temperature for
+            # OpenAI reasoning models, which reject non-default values).
+            from cat_stack._providers import apply_model_params
+            apply_model_params(payload, "openai", user_model, creativity=creativity)
             try:
                 response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
@@ -976,8 +986,10 @@ def image_score_drawing(
                 "max_tokens": 1024,
                 "messages": [{"role": "user", "content": prompt}],
             }
-            if creativity is not None:
-                payload["temperature"] = creativity
+            # Sampling params via the shared shaper (skips temperature on Anthropic
+            # models that 400 on it: Opus 4.7+, Sonnet 5, Fable 5).
+            from cat_stack._providers import apply_model_params
+            apply_model_params(payload, "anthropic", user_model, creativity=creativity)
             try:
                 response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
@@ -1009,8 +1021,9 @@ def image_score_drawing(
                 "model": user_model,
                 "messages": [{'role': 'user', 'content': prompt}],
             }
-            if creativity is not None:
-                payload["temperature"] = creativity
+            # Sampling params via the shared shaper.
+            from cat_stack._providers import apply_model_params
+            apply_model_params(payload, "mistral", user_model, creativity=creativity)
             try:
                 response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
@@ -1217,8 +1230,10 @@ def image_features(
                 "model": user_model,
                 "messages": [{'role': 'user', 'content': prompt}],
             }
-            if creativity is not None:
-                payload["temperature"] = creativity
+            # Sampling params via the shared shaper (skips temperature for
+            # OpenAI reasoning models, which reject non-default values).
+            from cat_stack._providers import apply_model_params
+            apply_model_params(payload, "openai", user_model, creativity=creativity)
             try:
                 response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
@@ -1246,8 +1261,9 @@ def image_features(
                 "model": user_model,
                 "messages": [{'role': 'user', 'content': prompt}],
             }
-            if creativity is not None:
-                payload["temperature"] = creativity
+            # Sampling params via the shared shaper.
+            from cat_stack._providers import apply_model_params
+            apply_model_params(payload, "perplexity", user_model, creativity=creativity)
             try:
                 response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
@@ -1277,8 +1293,10 @@ def image_features(
                 "max_tokens": 1024,
                 "messages": [{"role": "user", "content": prompt}],
             }
-            if creativity is not None:
-                payload["temperature"] = creativity
+            # Sampling params via the shared shaper (skips temperature on Anthropic
+            # models that 400 on it: Opus 4.7+, Sonnet 5, Fable 5).
+            from cat_stack._providers import apply_model_params
+            apply_model_params(payload, "anthropic", user_model, creativity=creativity)
             try:
                 response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
@@ -1310,8 +1328,9 @@ def image_features(
                 "model": user_model,
                 "messages": [{'role': 'user', 'content': prompt}],
             }
-            if creativity is not None:
-                payload["temperature"] = creativity
+            # Sampling params via the shared shaper.
+            from cat_stack._providers import apply_model_params
+            apply_model_params(payload, "mistral", user_model, creativity=creativity)
             try:
                 response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
@@ -1543,6 +1562,9 @@ def explore_image_categories(
 
     def call_model_with_image(img_path, prompt_text, max_retries=6):
         """Send an image to the model and get category extraction."""
+        # Sampling params via the shared shaper (lazy import; used by all
+        # provider branches below).
+        from cat_stack._providers import apply_model_params
         encoded, ext, is_valid = _encode_image(img_path)
         if not is_valid:
             return None
@@ -1563,8 +1585,9 @@ def explore_image_categories(
                         ]
                     }]
                     payload = {"model": user_model, "messages": messages}
-                    if creativity is not None:
-                        payload["temperature"] = creativity
+                    # Shared shaper: skips temperature for OpenAI reasoning
+                    # models, which reject non-default values.
+                    apply_model_params(payload, model_source, user_model, creativity=creativity)
                     response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                     response.raise_for_status()
                     result = response.json()
@@ -1587,8 +1610,9 @@ def explore_image_categories(
                         "max_tokens": 2048,
                         "messages": [{"role": "user", "content": content}],
                     }
-                    if creativity is not None:
-                        payload["temperature"] = creativity
+                    # Shared shaper: skips temperature on Anthropic models
+                    # that 400 on it (Opus 4.7+, Sonnet 5, Fable 5).
+                    apply_model_params(payload, "anthropic", user_model, creativity=creativity)
                     response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                     response.raise_for_status()
                     result = response.json()
@@ -1607,8 +1631,9 @@ def explore_image_categories(
                     ]
                     payload = {
                         "contents": [{"parts": parts}],
-                        "generationConfig": {**({"temperature": creativity} if creativity is not None else {})}
                     }
+                    # Shared shaper: temperature goes in top-level generationConfig.
+                    apply_model_params(payload, "google", user_model, creativity=creativity)
                     response = req.post(url, headers=headers, json=payload, timeout=120)
                     response.raise_for_status()
                     result = response.json()
@@ -1630,8 +1655,8 @@ def explore_image_categories(
                         ]
                     }]
                     payload = {"model": user_model, "messages": messages}
-                    if creativity is not None:
-                        payload["temperature"] = creativity
+                    # Shared shaper: plain temperature.
+                    apply_model_params(payload, "mistral", user_model, creativity=creativity)
                     response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                     response.raise_for_status()
                     result = response.json()
@@ -1649,6 +1674,9 @@ def explore_image_categories(
 
     def describe_image_with_vision(img_path, max_retries=6):
         """Use vision model to describe an image's content as text."""
+        # Sampling params via the shared shaper (lazy import; used by all
+        # provider branches below).
+        from cat_stack._providers import apply_model_params
         encoded, ext, is_valid = _encode_image(img_path)
         if not is_valid:
             return None
@@ -1670,8 +1698,9 @@ def explore_image_categories(
                         ]
                     }]
                     payload = {"model": user_model, "messages": messages}
-                    if creativity is not None:
-                        payload["temperature"] = creativity
+                    # Shared shaper: skips temperature for OpenAI reasoning
+                    # models, which reject non-default values.
+                    apply_model_params(payload, model_source, user_model, creativity=creativity)
                     response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                     response.raise_for_status()
                     result = response.json()
@@ -1694,8 +1723,9 @@ def explore_image_categories(
                         "max_tokens": 4096,
                         "messages": [{"role": "user", "content": content}],
                     }
-                    if creativity is not None:
-                        payload["temperature"] = creativity
+                    # Shared shaper: skips temperature on Anthropic models
+                    # that 400 on it (Opus 4.7+, Sonnet 5, Fable 5).
+                    apply_model_params(payload, "anthropic", user_model, creativity=creativity)
                     response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                     response.raise_for_status()
                     result = response.json()
@@ -1714,8 +1744,9 @@ def explore_image_categories(
                     ]
                     payload = {
                         "contents": [{"parts": parts}],
-                        "generationConfig": {**({"temperature": creativity} if creativity is not None else {})}
                     }
+                    # Shared shaper: temperature goes in top-level generationConfig.
+                    apply_model_params(payload, "google", user_model, creativity=creativity)
                     response = req.post(url, headers=headers, json=payload, timeout=120)
                     response.raise_for_status()
                     result = response.json()
@@ -1737,8 +1768,8 @@ def explore_image_categories(
                         ]
                     }]
                     payload = {"model": user_model, "messages": messages}
-                    if creativity is not None:
-                        payload["temperature"] = creativity
+                    # Shared shaper: plain temperature.
+                    apply_model_params(payload, "mistral", user_model, creativity=creativity)
                     response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                     response.raise_for_status()
                     result = response.json()
@@ -1756,6 +1787,9 @@ def explore_image_categories(
 
     def call_model_with_text(prompt_text):
         """Send text to the model for category extraction."""
+        # Sampling params via the shared shaper (lazy import; used by all
+        # provider branches below).
+        from cat_stack._providers import apply_model_params
         try:
             if model_source in ["openai", "huggingface", "huggingface-together", "xai"]:
                 endpoint = f"{openai_base_url}/chat/completions"
@@ -1764,8 +1798,9 @@ def explore_image_categories(
                     "Authorization": f"Bearer {api_key}"
                 }
                 payload = {"model": user_model, "messages": [{"role": "user", "content": prompt_text}]}
-                if creativity is not None:
-                    payload["temperature"] = creativity
+                # Shared shaper: skips temperature for OpenAI reasoning
+                # models, which reject non-default values.
+                apply_model_params(payload, model_source, user_model, creativity=creativity)
                 response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
                 result = response.json()
@@ -1783,8 +1818,9 @@ def explore_image_categories(
                     "max_tokens": 2048,
                     "messages": [{"role": "user", "content": prompt_text}],
                 }
-                if creativity is not None:
-                    payload["temperature"] = creativity
+                # Shared shaper: skips temperature on Anthropic models
+                # that 400 on it (Opus 4.7+, Sonnet 5, Fable 5).
+                apply_model_params(payload, "anthropic", user_model, creativity=creativity)
                 response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
                 result = response.json()
@@ -1798,8 +1834,9 @@ def explore_image_categories(
                 headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
                 payload = {
                     "contents": [{"parts": [{"text": prompt_text}]}],
-                    "generationConfig": {**({"temperature": creativity} if creativity is not None else {})}
                 }
+                # Shared shaper: temperature goes in top-level generationConfig.
+                apply_model_params(payload, "google", user_model, creativity=creativity)
                 response = req.post(url, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
                 result = response.json()
@@ -1814,8 +1851,8 @@ def explore_image_categories(
                     "Authorization": f"Bearer {api_key}"
                 }
                 payload = {"model": user_model, "messages": [{"role": "user", "content": prompt_text}]}
-                if creativity is not None:
-                    payload["temperature"] = creativity
+                # Shared shaper: plain temperature.
+                apply_model_params(payload, "mistral", user_model, creativity=creativity)
                 response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
                 result = response.json()
@@ -1932,6 +1969,9 @@ Categories (sorted by extraction frequency):
 Return ONLY a numbered list of {max_categories} categories.
 """.strip()
 
+    # Sampling params via the shared shaper (lazy import; used by all
+    # provider branches below).
+    from cat_stack._providers import apply_model_params
     try:
         if model_source in ["openai", "huggingface", "huggingface-together", "xai"]:
             endpoint = f"{openai_base_url}/chat/completions"
@@ -1940,8 +1980,9 @@ Return ONLY a numbered list of {max_categories} categories.
                 "Authorization": f"Bearer {api_key}"
             }
             payload = {"model": user_model, "messages": [{"role": "user", "content": second_prompt}]}
-            if creativity is not None:
-                payload["temperature"] = creativity
+            # Shared shaper: skips temperature for OpenAI reasoning
+            # models, which reject non-default values.
+            apply_model_params(payload, model_source, user_model, creativity=creativity)
             response = req.post(endpoint, headers=headers, json=payload, timeout=120)
             response.raise_for_status()
             result = response.json()
@@ -1958,8 +1999,9 @@ Return ONLY a numbered list of {max_categories} categories.
                 "max_tokens": 2048,
                 "messages": [{"role": "user", "content": second_prompt}],
             }
-            if creativity is not None:
-                payload["temperature"] = creativity
+            # Shared shaper: skips temperature on Anthropic models
+            # that 400 on it (Opus 4.7+, Sonnet 5, Fable 5).
+            apply_model_params(payload, "anthropic", user_model, creativity=creativity)
             response = req.post(endpoint, headers=headers, json=payload, timeout=120)
             response.raise_for_status()
             result = response.json()
@@ -1973,8 +2015,9 @@ Return ONLY a numbered list of {max_categories} categories.
             headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
             payload = {
                 "contents": [{"parts": [{"text": second_prompt}]}],
-                "generationConfig": {**({"temperature": creativity} if creativity is not None else {})}
             }
+            # Shared shaper: temperature goes in top-level generationConfig.
+            apply_model_params(payload, "google", user_model, creativity=creativity)
             response = req.post(url, headers=headers, json=payload, timeout=120)
             response.raise_for_status()
             res = response.json()
@@ -1986,8 +2029,8 @@ Return ONLY a numbered list of {max_categories} categories.
                 "Authorization": f"Bearer {api_key}"
             }
             payload = {"model": user_model, "messages": [{"role": "user", "content": second_prompt}]}
-            if creativity is not None:
-                payload["temperature"] = creativity
+            # Shared shaper: plain temperature.
+            apply_model_params(payload, "mistral", user_model, creativity=creativity)
             response = req.post(endpoint, headers=headers, json=payload, timeout=120)
             response.raise_for_status()
             result = response.json()

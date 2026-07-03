@@ -148,20 +148,28 @@ _WARNED_UNCONTROLLED_REASONING: set = set()
 
 
 # ---------------------------------------------------------------------------
-# Anthropic deprecated the `temperature` parameter starting with the Opus 4.7 /
-# 4.8 generation: these models return 400 "`temperature` is deprecated for this
-# model." if it is sent. Older models (opus-4-6, sonnet-4-6, sonnet-4-5, and
-# earlier) still accept it. This mirrors the OpenAI reasoning-model handling
-# above — we skip `temperature` up-front for the known-deprecated prefixes in
-# `_build_anthropic_payload`, and `UnifiedLLMClient.complete()` strips it on a
-# runtime 400 as a safety net for future families not yet in this table.
+# Anthropic rejects the sampling parameters (`temperature`, `top_p`, `top_k`)
+# with a 400 on newer generations: it began with Opus 4.7 / 4.8 and now also
+# covers the Sonnet-5 / Fable-5 generation. Setting any of them to a non-default
+# value returns 400 ("`temperature` is deprecated for this model." on the Opus
+# 4.7/4.8 line; a plain rejection on Sonnet 5 / Fable 5) — omitting them is
+# accepted. Older models (opus-4-6, sonnet-4-6, sonnet-4-5, and earlier) still
+# accept `temperature`. cat-stack only ever sends `temperature` (from
+# `creativity`) on Anthropic, so that is the only one we skip.
 #
-# Matched by name prefix; extend the tuple when new temperature-free models
+# This mirrors the OpenAI reasoning-model handling above — we skip `temperature`
+# up-front for the known prefixes in `_build_anthropic_payload`, and
+# `UnifiedLLMClient.complete()` strips it on a runtime 400 as a safety net for
+# future families not yet in this table.
+#
+# Matched by name prefix; extend the tuple when new sampling-param-free models
 # ship.
 # ---------------------------------------------------------------------------
 _ANTHROPIC_TEMPERATURE_DEPRECATED = (
     "claude-opus-4-7",
     "claude-opus-4-8",
+    "claude-sonnet-5",
+    "claude-fable-5",
 )
 
 
@@ -169,6 +177,69 @@ def _anthropic_supports_temperature(model: str) -> bool:
     """False for Anthropic models that reject the `temperature` param."""
     m = (model or "").lower()
     return not any(m.startswith(p) for p in _ANTHROPIC_TEMPERATURE_DEPRECATED)
+
+
+# ---------------------------------------------------------------------------
+# Anthropic extended-thinking API generations. Newer models (Opus 4.7 / 4.8,
+# Sonnet 5, Fable 5) removed the legacy fixed-budget form —
+# `thinking: {"type": "enabled", "budget_tokens": N}` returns a 400 — and use
+# adaptive thinking instead (`thinking: {"type": "adaptive"}`, depth tuned via
+# `output_config.effort`, which we set from thinking_budget — see
+# `_thinking_budget_to_effort`). Older models (Opus 4.6, Sonnet 4.6, and
+# earlier) still accept `budget_tokens` (deprecated on 4.6 but functional), so
+# we keep sending it there to preserve behavior.
+#
+# Kept as a separate table from `_ANTHROPIC_TEMPERATURE_DEPRECATED` — the two
+# constraints happen to cover the same models today but are independent and may
+# diverge. `complete()` strips a rejected fixed-budget payload to adaptive on a
+# runtime 400 as a safety net for families not yet listed here.
+# ---------------------------------------------------------------------------
+_ANTHROPIC_ADAPTIVE_THINKING = (
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-sonnet-5",
+    "claude-fable-5",
+)
+
+
+def _anthropic_uses_adaptive_thinking(model: str) -> bool:
+    """True for Anthropic models that reject fixed `budget_tokens` and require
+    adaptive thinking instead."""
+    m = (model or "").lower()
+    return any(m.startswith(p) for p in _ANTHROPIC_ADAPTIVE_THINKING)
+
+
+# ---------------------------------------------------------------------------
+# Canonical thinking_budget -> effort tier.
+#
+# `thinking_budget` is the single user-facing reasoning knob (a token count).
+# Providers whose API takes a literal token budget (Google, older Anthropic)
+# receive it directly; providers whose API takes an effort ENUM instead
+# (OpenAI / xAI `reasoning_effort`, Anthropic `output_config.effort`, Ollama
+# gpt-oss `think`) receive a coarse tier from this one table — so the same
+# thinking_budget produces comparable reasoning intensity regardless of
+# provider, instead of every positive budget collapsing to "high".
+#
+# Only meaningful for budget > 0; each provider represents "off" (budget <= 0)
+# in its own way (OpenAI floors at "none"/"minimal"/"low"; Anthropic omits the
+# thinking block; Ollama sends its family's low/False value). Capped at "high"
+# — the tier every effort-enum provider accepts — so cross-provider parity
+# holds (Anthropic's "xhigh"/"max" are deliberately not emitted here).
+#
+# The two thresholds are the one place to retune the token<->tier mapping.
+# ---------------------------------------------------------------------------
+_THINKING_EFFORT_LOW_MAX = 2048       # budget <= this -> "low"
+_THINKING_EFFORT_MEDIUM_MAX = 8192    # budget <= this -> "medium"; above -> "high"
+
+
+def _thinking_budget_to_effort(thinking_budget: int) -> str:
+    """Map a positive `thinking_budget` (tokens) to a low/medium/high effort
+    tier shared by every effort-enum provider. Callers guard budget > 0."""
+    if thinking_budget <= _THINKING_EFFORT_LOW_MAX:
+        return "low"
+    if thinking_budget <= _THINKING_EFFORT_MEDIUM_MAX:
+        return "medium"
+    return "high"
 
 
 # ---------------------------------------------------------------------------
@@ -225,13 +296,242 @@ def _ollama_think_value(model: str, thinking_budget):
         return None
     for prefix, fmt, low_val, high_val in _OLLAMA_REASONING_MODELS:
         if model.startswith(prefix):
-            return low_val if thinking_budget == 0 else high_val
+            if thinking_budget == 0:
+                return low_val
+            # Enum families (gpt-oss) accept low/medium/high — grade them from
+            # the shared token->tier table for cross-provider consistency. Bool
+            # families can only toggle on/off, so a positive budget -> on.
+            if fmt == "enum":
+                return _thinking_budget_to_effort(thinking_budget)
+            return high_val
     return None
+
+
+# ---------------------------------------------------------------------------
+# Shared sampling/reasoning param shaping.
+#
+# Single source of truth for "which sampling / reasoning params does this
+# provider+model accept, and in what form". Every payload builder — the
+# central `_build_*_payload` methods on UnifiedLLMClient AND the per-strategy
+# leaves in `calls/` / `image_functions.py` / `pdf_functions.py` that build
+# payloads directly — routes through this function, so a new provider quirk
+# (a model family rejecting `temperature`, a new thinking shape, …) is fixed
+# here once instead of at every call site.
+#
+# The function only shapes params; callers keep their own structural fields
+# (model / messages / system / max_tokens / response_format / tools) and
+# their own HTTP or SDK transport. `complete()`'s runtime 400 fallbacks stay
+# in `complete()` — stateless callers get correct up-front params for all
+# known model families but no runtime safety net.
+# ---------------------------------------------------------------------------
+def apply_model_params(
+    payload: dict,
+    provider: str,
+    model: str,
+    creativity: float = None,
+    thinking_budget: int = None,
+    overrides: dict = None,
+) -> dict:
+    """Apply provider/model-appropriate sampling + reasoning params to
+    `payload`, in place, and return it.
+
+    Args:
+        payload: The request body (or SDK kwargs dict) built so far. For
+                 Anthropic it should already carry `max_tokens` if the caller
+                 wants the thinking-headroom bump; for Google, params land
+                 inside `generationConfig` (created if missing).
+        provider: One of "openai", "anthropic", "google", "mistral",
+                  "perplexity", "xai", "huggingface", "huggingface-together",
+                  "ollama". Unknown providers get the plain-temperature
+                  default.
+        creativity: User temperature, or None to omit.
+        thinking_budget: cat-stack's cross-provider reasoning knob (tokens).
+                 None → don't touch reasoning params; 0 → request reasoning
+                 off in the provider's own vocabulary; >0 → provider-native
+                 form (token budget or graded effort tier via
+                 `_thinking_budget_to_effort`).
+        overrides: Runtime-discovered capability flags cached by
+                 `UnifiedLLMClient.complete()`'s 400 fallbacks (see
+                 `UnifiedLLMClient._param_overrides()`). Stateless callers
+                 (the `calls/` leaves) omit it.
+    """
+    ov = overrides or {}
+
+    if provider == "anthropic":
+        # Newer Anthropic models (Opus 4.7+, Sonnet 5, Fable 5) deprecated
+        # `temperature` and 400 if it is sent. Skip it for those known
+        # prefixes, and also honor the flag cached by complete()'s runtime
+        # 400 fallback for future families.
+        temp_ok = (
+            _anthropic_supports_temperature(model)
+            and not ov.get("anthropic_temperature_unsupported", False)
+        )
+        # Extended thinking. Newer generations (Opus 4.7+, Sonnet 5, Fable 5)
+        # require adaptive thinking and 400 on the legacy fixed-budget form;
+        # older models still take an explicit budget. Either way the
+        # reasoning tokens count against max_tokens, so give the answer
+        # headroom. On the legacy path only, temperature must be 1 when
+        # thinking is on (Anthropic requirement) — the adaptive-thinking
+        # models reject temperature entirely, so we never set it there.
+        if thinking_budget and thinking_budget > 0:
+            budget = max(thinking_budget, 1024)
+            adaptive = (
+                _anthropic_uses_adaptive_thinking(model)
+                or ov.get("anthropic_thinking_adaptive", False)
+            )
+            if adaptive:
+                payload["thinking"] = {"type": "adaptive"}
+                # Depth on the adaptive path is controlled via effort, mapped
+                # from thinking_budget the same way as the other effort-enum
+                # providers. Use the raw budget (not the 1024-floored
+                # `budget`) so the tier matches what OpenAI / xAI derive from
+                # the same value.
+                payload["output_config"] = {
+                    "effort": _thinking_budget_to_effort(thinking_budget)
+                }
+            else:
+                payload["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": budget,
+                }
+                if temp_ok:
+                    payload["temperature"] = 1
+            # `budget` doubles as a headroom hint on the adaptive path (where
+            # the model, not us, decides how much to think): keep max_tokens
+            # above it so reasoning doesn't crowd out the answer.
+            if "max_tokens" in payload and payload["max_tokens"] <= budget:
+                payload["max_tokens"] = budget + 4096
+        elif creativity is not None and temp_ok:
+            payload["temperature"] = creativity
+        return payload
+
+    if provider == "google":
+        # Both params live inside generationConfig (top-level is rejected by
+        # Gemini). An explicit zero budget is SENT (since v1.6.8): Gemini's
+        # provider default is thinking ON, so omitting the field would leave
+        # the uniform "reasoning off" request silently unmet. Models that
+        # reject 0 (minimum-budget tiers) are handled by the 400 fallback in
+        # complete(), which caches the discovered floor on the client
+        # ("google_thinking_floor").
+        if creativity is not None:
+            payload.setdefault("generationConfig", {})["temperature"] = creativity
+        if thinking_budget is not None:
+            if thinking_budget > 0:
+                budget = max(thinking_budget, 128)
+            else:
+                budget = ov.get("google_thinking_floor", 0)
+            payload.setdefault("generationConfig", {})["thinkingConfig"] = {
+                "thinkingBudget": budget
+            }
+        return payload
+
+    if provider == "openai":
+        # OpenAI reasoning models (o-series, GPT-5) only accept
+        # temperature=1; reasoning_effort controls depth instead.
+        is_reasoning_model = any(
+            (model or "").startswith(p) for p in ("o1", "o3", "o4", "gpt-5")
+        )
+        if is_reasoning_model:
+            if thinking_budget is not None:
+                if thinking_budget > 0:
+                    # Graded low/medium/high from the shared token->tier table
+                    # so the same thinking_budget matches the other providers.
+                    payload["reasoning_effort"] = _thinking_budget_to_effort(
+                        thinking_budget
+                    )
+                else:
+                    # Off-equivalent value depends on the model family — see
+                    # `_OPENAI_REASONING_EFFORT_FLOORS`. A previously-
+                    # discovered fallback (from a 400 retry in complete())
+                    # wins if cached on the client.
+                    payload["reasoning_effort"] = (
+                        ov.get("reasoning_effort_override")
+                        or _openai_reasoning_effort_floor(model)
+                    )
+        elif creativity is not None:
+            payload["temperature"] = creativity
+        return payload
+
+    if provider == "xai":
+        if creativity is not None:
+            payload["temperature"] = creativity
+        # Hybrid grok models accept reasoning_effort alongside temperature.
+        # "low" is the lowest tier xAI exposes (no "none" / "minimal");
+        # explicitly non-reasoning variants 400 on the field — complete()
+        # pops it and caches "xai_no_reasoning_effort" so later rows on that
+        # client skip the doomed field up front. Variants whose name already
+        # encodes "non-reasoning" are off by model choice; sending
+        # reasoning_effort to them turns reasoning back ON (verified
+        # 2026-06-13), so leave them alone.
+        if (
+            thinking_budget is not None
+            and not ov.get("xai_no_reasoning_effort", False)
+            and "non-reasoning" not in (model or "").lower()
+        ):
+            payload["reasoning_effort"] = (
+                "low" if thinking_budget == 0
+                else _thinking_budget_to_effort(thinking_budget)
+            )
+        return payload
+
+    if provider == "ollama":
+        if creativity is not None:
+            payload["temperature"] = creativity
+        # Per-model-family reasoning control via the top-level `think` field.
+        # gpt-oss expects an enum ("low"/"medium"/"high"); qwen3/deepseek-r1
+        # expect a boolean. Models not in the `_OLLAMA_REASONING_MODELS`
+        # registry don't support reasoning and get no `think` field (would be
+        # a no-op at best, validator-confusing at worst). Without this,
+        # Ollama-served gpt-oss produces long `<think>` blocks by default
+        # that bloat per-row generation 3-5x.
+        think_value = _ollama_think_value(model, thinking_budget)
+        if think_value is not None:
+            payload["think"] = think_value
+        return payload
+
+    if provider in ("huggingface", "huggingface-together"):
+        if creativity is not None:
+            payload["temperature"] = creativity
+        # Disable thinking on model families whose chat template honors
+        # `enable_thinking` (Qwen3-family). Other HF-routed models don't need
+        # the kwarg, and strict-validator backends (Fireworks, Groq) reject
+        # the unknown field outright — sending it to a non-Qwen model just
+        # buys a wasted retry. See `_hf_model_needs_enable_thinking_off()`.
+        # The runtime fallback in `complete()` still strips on 400 if a
+        # router rejects the kwarg even for a model we expected to support it.
+        if thinking_budget == 0 and _hf_model_needs_enable_thinking_off(model):
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
+        elif (
+            thinking_budget == 0
+            and _hf_model_reasons_by_default(model)
+            and model not in _WARNED_UNCONTROLLED_REASONING
+        ):
+            # These router-served models reason by default and honor no
+            # off-switch through the router (enable_thinking is 400-rejected
+            # for their templates). Warn once per process (a fresh client is
+            # built per row, so a per-instance flag would warn every row) so
+            # the uniform "reasoning off" request isn't silently unmet.
+            print(
+                f"\n[CatLLM] WARNING: no effective reasoning control delivered "
+                f"for '{model}'; the provider's default reasoning "
+                f"behavior applies. See docs/reasoning-controls.md.\n"
+            )
+            _WARNED_UNCONTROLLED_REASONING.add(model)
+        return payload
+
+    # Other OpenAI-compatible providers (mistral, perplexity, …): plain
+    # temperature, no reasoning knob.
+    if creativity is not None:
+        payload["temperature"] = creativity
+    return payload
+
 
 __all__ = [
     # Main client
     "UnifiedLLMClient",
     "PROVIDER_CONFIG",
+    # Shared sampling/reasoning param shaping
+    "apply_model_params",
     # Provider detection
     "detect_provider",
     "_detect_model_source",
@@ -560,6 +860,26 @@ class UnifiedLLMClient:
 
         return headers
 
+    def _param_overrides(self) -> dict:
+        """Runtime-discovered capability flags cached on this client by
+        complete()'s 400 fallbacks, in the shape `apply_model_params()`
+        expects. Absent flags fall back to the static capability tables."""
+        return {
+            "anthropic_temperature_unsupported": getattr(
+                self, "_anthropic_temperature_unsupported", False
+            ),
+            "anthropic_thinking_adaptive": getattr(
+                self, "_anthropic_thinking_adaptive", False
+            ),
+            "reasoning_effort_override": getattr(
+                self, "_reasoning_effort_override", None
+            ),
+            "xai_no_reasoning_effort": getattr(
+                self, "_xai_no_reasoning_effort", False
+            ),
+            "google_thinking_floor": getattr(self, "_google_thinking_floor", 0),
+        }
+
     def _build_payload(
         self,
         messages: list,
@@ -614,13 +934,15 @@ class UnifiedLLMClient:
                              provider's off-equivalent value from
                              `_OPENAI_REASONING_EFFORT_FLOORS`
                              ("none" for gpt-5.4+, "minimal" for o-series
-                             and gpt-5.0-5.3). `thinking_budget>0` maps to
-                             "high". If the chosen value is rejected at
-                             runtime with 400 `unsupported_value`,
-                             `complete()` retries with "low" (universally
-                             accepted) and caches the override on the
-                             client so subsequent calls skip the bad
-                             value.
+                             and gpt-5.0-5.3). `thinking_budget>0` maps to a
+                             graded low/medium/high tier via the shared
+                             `_thinking_budget_to_effort` table (so the same
+                             budget is comparable across providers). If the
+                             chosen value is rejected at runtime with 400
+                             `unsupported_value`, `complete()` retries with
+                             "low" (universally accepted) and caches the
+                             override on the client so subsequent calls skip
+                             the bad value.
         """
         payload = {
             "model": self.model,
@@ -646,93 +968,17 @@ class UnifiedLLMClient:
             payload["response_format"] = {"type": "json_object"}
         # else: no response_format - allow text responses
 
-        # OpenAI reasoning models (o-series, GPT-5) only accept temperature=1.
-        # Use reasoning_effort to control reasoning depth instead.
-        _is_reasoning_model = self.provider == "openai" and any(
-            self.model.startswith(p) for p in ("o1", "o3", "o4", "gpt-5")
+        # Sampling + reasoning params (temperature, reasoning_effort, Ollama
+        # `think`, HF chat_template_kwargs) — shared shaper, one source of
+        # truth across all payload builders.
+        apply_model_params(
+            payload,
+            self.provider,
+            self.model,
+            creativity=creativity,
+            thinking_budget=thinking_budget,
+            overrides=self._param_overrides(),
         )
-        if _is_reasoning_model:
-            # Never set temperature for reasoning models (only default=1 is valid)
-            if thinking_budget is not None:
-                if thinking_budget > 0:
-                    payload["reasoning_effort"] = "high"
-                else:
-                    # Off-equivalent value depends on the model family —
-                    # see `_OPENAI_REASONING_EFFORT_FLOORS`. A previously-
-                    # discovered fallback (from a 400 retry in complete())
-                    # wins if cached on the client.
-                    payload["reasoning_effort"] = (
-                        getattr(self, "_reasoning_effort_override", None)
-                        or _openai_reasoning_effort_floor(self.model)
-                    )
-        elif creativity is not None:
-            payload["temperature"] = creativity
-
-        # xAI (v1.6.8): hybrid grok models accept reasoning_effort alongside
-        # temperature. "low" is the lowest tier xAI exposes (no "none" /
-        # "minimal"); explicitly non-reasoning variants 400 on the field —
-        # complete() pops it and caches `_xai_no_reasoning_effort` so later
-        # rows on this client skip the doomed field up front.
-        if (
-            self.provider == "xai"
-            and thinking_budget is not None
-            and not getattr(self, "_xai_no_reasoning_effort", False)
-            # Variants whose name already encodes "non-reasoning" are off by
-            # model choice; sending reasoning_effort to them is not just
-            # redundant but HARMFUL — verified 2026-06-13 that
-            # grok-4-1-fast-non-reasoning returns 0 reasoning tokens with no
-            # field but 207 when sent reasoning_effort="low", i.e. the field
-            # turns reasoning back ON. Leave these alone.
-            and "non-reasoning" not in (self.model or "").lower()
-        ):
-            payload["reasoning_effort"] = "low" if thinking_budget == 0 else "high"
-
-        # Ollama: per-model-family reasoning control via the top-level
-        # `think` field. gpt-oss expects an enum ("low"/"medium"/"high");
-        # qwen3/deepseek-r1 expect a boolean. Models not in the
-        # `_OLLAMA_REASONING_MODELS` registry don't support reasoning and
-        # get no `think` field (would be a no-op at best, validator-
-        # confusing at worst). Without this, Ollama-served gpt-oss
-        # produces long `<think>` blocks by default that bloat per-row
-        # generation 3-5x.
-        if self.provider == "ollama":
-            think_value = _ollama_think_value(self.model, thinking_budget)
-            if think_value is not None:
-                payload["think"] = think_value
-
-        # HuggingFace: disable thinking on model families whose chat
-        # template honors `enable_thinking` (Qwen3-family). Other HF-routed
-        # models don't need the kwarg, and strict-validator backends
-        # (Fireworks, Groq) reject the unknown field outright — sending it
-        # to a non-Qwen model just buys a wasted retry. See
-        # `_hf_model_needs_enable_thinking_off()`. The runtime fallback in
-        # `complete()` still strips on 400 if a router rejects the kwarg
-        # even for a model we expected to support it.
-        if (
-            self.provider in ("huggingface", "huggingface-together")
-            and thinking_budget is not None
-            and thinking_budget == 0
-            and _hf_model_needs_enable_thinking_off(self.model)
-        ):
-            payload["chat_template_kwargs"] = {"enable_thinking": False}
-        elif (
-            self.provider in ("huggingface", "huggingface-together")
-            and thinking_budget == 0
-            and _hf_model_reasons_by_default(self.model)
-            and self.model not in _WARNED_UNCONTROLLED_REASONING
-        ):
-            # v1.6.8: these router-served models reason by default and honor
-            # no off-switch through the router (enable_thinking is
-            # 400-rejected for their templates). Warn once per process (a
-            # fresh client is built per row, so a per-instance flag would
-            # warn every row) so the uniform "reasoning off" request isn't
-            # silently unmet.
-            print(
-                f"\n[CatLLM] WARNING: no effective reasoning control delivered "
-                f"for '{self.model}'; the provider's default reasoning "
-                f"behavior applies. See docs/reasoning-controls.md.\n"
-            )
-            _WARNED_UNCONTROLLED_REASONING.add(self.model)
 
         return payload
 
@@ -769,30 +1015,17 @@ class UnifiedLLMClient:
         if system_content:
             payload["system"] = system_content
 
-        # Newer Anthropic models (Opus 4.7+) deprecated `temperature` and 400 if
-        # it is sent. Skip it for those known prefixes, and also honor the flag
-        # cached by complete()'s runtime 400 fallback for future families.
-        _temp_ok = (
-            _anthropic_supports_temperature(self.model)
-            and not getattr(self, "_anthropic_temperature_unsupported", False)
+        # Temperature gating + thinking shape (adaptive vs fixed-budget) +
+        # max_tokens headroom — shared shaper, one source of truth across all
+        # payload builders.
+        apply_model_params(
+            payload,
+            "anthropic",
+            self.model,
+            creativity=creativity,
+            thinking_budget=thinking_budget,
+            overrides=self._param_overrides(),
         )
-
-        # Extended thinking for Anthropic (minimum 1024 tokens)
-        # When thinking is enabled, temperature must be 1 (Anthropic requirement),
-        # so we skip setting temperature from creativity in that case
-        if thinking_budget and thinking_budget > 0:
-            budget = max(thinking_budget, 1024)
-            payload["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": budget,
-            }
-            if _temp_ok:
-                payload["temperature"] = 1
-            # When thinking is enabled, max_tokens must be larger than budget_tokens
-            if payload["max_tokens"] <= budget:
-                payload["max_tokens"] = budget + 4096
-        elif creativity is not None and _temp_ok:
-            payload["temperature"] = creativity
 
         # Use tool calling for structured output (most reliable for Anthropic)
         # When thinking is enabled, forced tool_choice is not allowed — use "auto"
@@ -841,23 +1074,16 @@ class UnifiedLLMClient:
             payload["generationConfig"]["responseMimeType"] = "application/json"
         # else: no mime type - allow text responses
 
-        if creativity is not None:
-            payload["generationConfig"]["temperature"] = creativity
-
-        # Reasoning control (Google-specific). Must be inside generationConfig.
-        # v1.6.8: an explicit zero budget is now SENT at thinking_budget = 0.
-        # Previously nothing was sent at 0 and Gemini ran at its provider
-        # default, which the 2026-06-12 audit measured as thinking ON
-        # (~200+ thought tokens on a trivial classification call). Models
-        # that reject 0 (minimum-budget tiers) are handled by the 400
-        # fallback in complete(), which caches the discovered floor on the
-        # client (`_google_thinking_floor`).
-        if thinking_budget is not None:
-            if thinking_budget > 0:
-                budget = max(thinking_budget, 128)
-            else:
-                budget = getattr(self, "_google_thinking_floor", 0)
-            payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": budget}
+        # Temperature + thinkingConfig (both inside generationConfig) —
+        # shared shaper, one source of truth across all payload builders.
+        apply_model_params(
+            payload,
+            "google",
+            self.model,
+            creativity=creativity,
+            thinking_budget=thinking_budget,
+            overrides=self._param_overrides(),
+        )
 
         return payload
 
@@ -876,15 +1102,23 @@ class UnifiedLLMClient:
         return response_json["choices"][0]["message"]["content"]
 
     def _parse_anthropic_response(self, response_json: dict) -> str:
-        """Parse Anthropic response (handles both text and tool use)."""
+        """Parse Anthropic response (handles both text and tool use).
+
+        A tool_use block is preferred over any text, wherever it appears: with
+        extended/adaptive thinking the model uses tool_choice="auto" and may emit
+        a text preamble before the tool call, so returning the first text block
+        would drop the structured categories. `thinking` blocks are ignored.
+        """
         content = response_json.get("content", [])
+        first_text = None
         for block in content:
-            if block.get("type") == "tool_use":
+            btype = block.get("type")
+            if btype == "tool_use":
                 # Return the tool input as JSON string
                 return json.dumps(block.get("input", {}))
-            elif block.get("type") == "text":
-                return block.get("text", "")
-        return ""
+            elif btype == "text" and first_text is None:
+                first_text = block.get("text", "")
+        return first_text if first_text is not None else ""
 
     def _parse_google_response(self, response_json: dict) -> str:
         """Parse Google Gemini response."""
@@ -989,16 +1223,20 @@ class UnifiedLLMClient:
             messages: List of message dicts with 'role' and 'content'
             json_schema: Optional JSON schema for structured output
             creativity: Temperature setting (None for default)
-            thinking_budget: Controls reasoning behavior per provider:
-                - Google: Token budget for extended thinking (0 to disable, >0 to enable)
-                - OpenAI: Maps to reasoning_effort. `thinking_budget=0`
-                  picks the model's off-equivalent value from
-                  `_OPENAI_REASONING_EFFORT_FLOORS` ("none" for gpt-5.4+,
-                  "minimal" for older o-series / gpt-5.0-5.3). If the
-                  picked value is rejected at runtime, the client falls
-                  back to "low" (universally accepted) and caches the
-                  override. `thinking_budget>0` maps to "high".
-                - Anthropic: Enables extended thinking (0 to disable, >0 to enable with min 1024)
+            thinking_budget: A single token-count knob for reasoning depth,
+                translated to each provider's native form so the same value is
+                comparable across providers (see `_thinking_budget_to_effort`):
+                - Google: literal token budget (0 to disable, >0 to enable).
+                - Anthropic (Opus 4.6 / Sonnet 4.6 and earlier): literal
+                  `budget_tokens` (0 to disable, >0 to enable with min 1024).
+                - Anthropic (Opus 4.7+, Sonnet 5, Fable 5): adaptive thinking
+                  with `output_config.effort` graded from the budget.
+                - OpenAI / xAI: `reasoning_effort`. `thinking_budget=0` picks
+                  the model's off-floor ("none"/"minimal"/"low"); >0 maps to a
+                  graded low/medium/high tier. A rejected value falls back to
+                  "low" at runtime and is cached.
+                - Ollama gpt-oss: graded `think` enum; bool families toggle
+                  on/off. HuggingFace Qwen3: on/off via `enable_thinking`.
             force_json: If True and no json_schema, still request JSON output.
                        Set to False for text-only responses (e.g., CoVe intermediate steps)
             max_retries: Maximum retry attempts
@@ -1142,23 +1380,67 @@ class UnifiedLLMClient:
                               f"falling back to the minimum (128) and caching for this client.\n")
                         continue
 
-                    # Anthropic deprecated `temperature` for newer models
-                    # (Opus 4.7+): they 400 with "`temperature` is deprecated
-                    # for this model." Strip it, cache on the client so the
-                    # payload builder skips it for subsequent rows on this
-                    # client, and retry. Safety net for families not yet in
-                    # `_ANTHROPIC_TEMPERATURE_DEPRECATED`.
-                    if (
+                    # Anthropic rejects `temperature` on newer models (Opus
+                    # 4.7+, and now the Sonnet-5 / Fable-5 generation). The
+                    # wording varies by family: the Opus 4.7/4.8 line 400s with
+                    # "`temperature` is deprecated for this model.", while
+                    # Sonnet 5 / Fable 5 reject the parameter itself. Match any
+                    # rejection phrase (not just "deprecated") so the net also
+                    # covers families not yet in `_ANTHROPIC_TEMPERATURE_DEPRECATED`.
+                    # Strip it, cache on the client so the payload builder skips
+                    # it for subsequent rows on this client, and retry.
+                    _temp_rejected = (
                         "temperature" in error_text
-                        and "deprecated" in error_text
                         and "temperature" in payload
-                    ):
+                        and any(phrase in error_text for phrase in (
+                            "deprecated", "not supported", "unsupported",
+                            "not permitted", "not allowed", "not accepted",
+                            "unexpected", "extra inputs", "removed",
+                        ))
+                    )
+                    if _temp_rejected:
                         if not getattr(self, '_warned_temperature_deprecated', False):
-                            print(f"\n[CatLLM] Model '{self.model}' deprecated the temperature parameter.")
+                            print(f"\n[CatLLM] Model '{self.model}' does not accept the temperature parameter.")
                             print(f"  Dropping it and caching for subsequent calls on this client.\n")
                             self._warned_temperature_deprecated = True
                         self._anthropic_temperature_unsupported = True
                         payload.pop("temperature")
+                        continue
+
+                    # Anthropic rejects the legacy fixed-budget thinking API
+                    # (`thinking: {"type":"enabled","budget_tokens":N}`) on newer
+                    # models (Opus 4.7+, Sonnet 5, Fable 5), which require adaptive
+                    # thinking. Rewrite the payload to adaptive, cache the decision,
+                    # and retry — safety net for families not yet in
+                    # `_ANTHROPIC_ADAPTIVE_THINKING`. Those same models also reject
+                    # `temperature`, so drop it here too to avoid a second round-trip.
+                    _thinking = payload.get("thinking")
+                    _thinking_rejected = (
+                        isinstance(_thinking, dict)
+                        and _thinking.get("type") == "enabled"
+                        and ("thinking" in error_text or "budget_tokens" in error_text)
+                        and any(phrase in error_text for phrase in (
+                            "adaptive", "deprecated", "not supported", "unsupported",
+                            "not permitted", "not allowed", "not accepted",
+                            "unexpected", "removed",
+                        ))
+                    )
+                    if _thinking_rejected:
+                        if not getattr(self, '_warned_thinking_adaptive', False):
+                            print(f"\n[CatLLM] Model '{self.model}' rejected fixed-budget thinking.")
+                            print(f"  Switching to adaptive thinking and caching for this client.\n")
+                            self._warned_thinking_adaptive = True
+                        self._anthropic_thinking_adaptive = True
+                        _prior_budget = _thinking.get("budget_tokens", 0)
+                        payload["thinking"] = {"type": "adaptive"}
+                        # Carry depth over to effort, matching the proactive path.
+                        if _prior_budget and _prior_budget > 0:
+                            payload["output_config"] = {
+                                "effort": _thinking_budget_to_effort(_prior_budget)
+                            }
+                        if "temperature" in payload:
+                            self._anthropic_temperature_unsupported = True
+                            payload.pop("temperature")
                         continue
 
                     # HuggingFace: try other routers when the current one

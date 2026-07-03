@@ -56,8 +56,10 @@ def get_openai_top_n(
         ],
     }
 
-    if creativity is not None:
-        payload["temperature"] = creativity
+    # Sampling params via the shared shaper (skips temperature for OpenAI
+    # reasoning models, which reject non-default values).
+    from cat_stack._providers import apply_model_params
+    apply_model_params(payload, model_source or "openai", user_model, creativity=creativity)
 
     response = requests.post(endpoint, headers=headers, json=payload, timeout=120)
     response.raise_for_status()
@@ -105,8 +107,10 @@ def get_anthropic_top_n(
         "messages": [{"role": "user", "content": prompt}],
     }
 
-    if creativity is not None:
-        payload["temperature"] = creativity
+    # Sampling params via the shared shaper (skips temperature on Anthropic
+    # models that 400 on it: Opus 4.7+, Sonnet 5, Fable 5).
+    from cat_stack._providers import apply_model_params
+    apply_model_params(payload, "anthropic", user_model, creativity=creativity)
 
     response = requests.post(endpoint, headers=headers, json=payload, timeout=120)
     response.raise_for_status()
@@ -155,11 +159,13 @@ def get_google_top_n(
         "contents": [{
             "parts": [{"text": full_prompt}]
         }],
-        "generationConfig": {
-            **({"temperature": creativity} if creativity is not None else {})
-        }
     }
-    
+
+    # Sampling params via the shared shaper (lands inside generationConfig).
+    from cat_stack._providers import apply_model_params
+    apply_model_params(payload, "google", user_model, creativity=creativity)
+
+
     response = requests.post(url, headers=headers, json=payload)
     response.raise_for_status()
     
@@ -206,8 +212,10 @@ def get_mistral_top_n(
             {'role': 'user', 'content': prompt}
         ],
     }
-    if creativity is not None:
-        payload["temperature"] = creativity
+
+    # Sampling params via the shared shaper.
+    from cat_stack._providers import apply_model_params
+    apply_model_params(payload, "mistral", user_model, creativity=creativity)
 
     response = requests.post(endpoint, headers=headers, json=payload, timeout=120)
     response.raise_for_status()

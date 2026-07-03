@@ -146,10 +146,15 @@ def classify(
         chain_of_thought (bool): Enable step-by-step reasoning. Default False.
         step_back_prompt (bool): Enable step-back prompting.
         context_prompt (bool): Add expert context to prompts.
-        thinking_budget (int): Controls reasoning behavior per provider:
-            Google: token budget for extended thinking (0=off, >0=on).
-            OpenAI: maps to reasoning_effort (0="minimal", >0="high").
-            Anthropic: enables extended thinking (0=off, >0=on, min 1024).
+        thinking_budget (int): A single token-count reasoning knob, translated
+            to each provider's native form so the same value is comparable
+            across providers (0=off everywhere):
+            Google / older Anthropic (Opus 4.6, Sonnet 4.6): literal token
+                budget for extended thinking.
+            Newer Anthropic (Opus 4.7+, Sonnet 5, Fable 5): adaptive thinking
+                with effort graded from the budget.
+            OpenAI / xAI: reasoning_effort, graded low/medium/high by budget
+                (<=2048 low, <=8192 medium, else high; 0=off-floor).
         example1-6 (str): Example categorizations for few-shot learning.
         filename (str): Output filename for CSV.
         save_directory (str): Directory to save results.

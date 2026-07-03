@@ -665,8 +665,10 @@ Provide the final categorization in the same JSON format:"""
                     "model": user_model,
                     "messages": messages,
                 }
-                if creativity is not None:
-                    payload["temperature"] = creativity
+                # Sampling params via the shared shaper (skips temperature for
+                # OpenAI reasoning models, which reject non-default values).
+                from cat_stack._providers import apply_model_params
+                apply_model_params(payload, model_source or "openai", user_model, creativity=creativity)
 
                 response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
@@ -744,8 +746,10 @@ Provide the final categorization in the same JSON format:"""
                 "max_tokens": 1024,
                 "messages": messages,
             }
-            if creativity is not None:
-                payload["temperature"] = creativity
+            # Sampling params via the shared shaper (skips temperature on
+            # Anthropic models that 400 on it: Opus 4.7+, Sonnet 5, Fable 5).
+            from cat_stack._providers import apply_model_params
+            apply_model_params(payload, "anthropic", user_model, creativity=creativity)
 
             response = req.post(endpoint, headers=headers, json=payload, timeout=120)
             response.raise_for_status()
@@ -810,10 +814,13 @@ Provide the final categorization in the same JSON format:"""
             "contents": [{"parts": parts}],
             "generationConfig": {
                 "responseMimeType": "application/json",
-                **({"temperature": creativity} if creativity is not None else {}),
                 **({"thinkingConfig": {"thinkingBudget": thinking_budget}} if thinking_budget else {})
             }
         }
+        # Sampling params via the shared shaper (temperature lands inside the
+        # top-level generationConfig).
+        from cat_stack._providers import apply_model_params
+        apply_model_params(payload, "google", user_model, creativity=creativity)
 
         try:
             result = make_google_request(url, headers, payload)
@@ -882,8 +889,9 @@ Provide the final categorization in the same JSON format:"""
                     "model": user_model,
                     "messages": messages,
                 }
-                if creativity is not None:
-                    payload["temperature"] = creativity
+                # Sampling params via the shared shaper.
+                from cat_stack._providers import apply_model_params
+                apply_model_params(payload, "mistral", user_model, creativity=creativity)
 
                 response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
@@ -973,8 +981,10 @@ Provide the final categorization in the same JSON format:"""
                     "model": user_model,
                     "messages": messages,
                 }
-                if creativity is not None:
-                    payload["temperature"] = creativity
+                # Sampling params via the shared shaper (skips temperature for
+                # OpenAI reasoning models, which reject non-default values).
+                from cat_stack._providers import apply_model_params
+                apply_model_params(payload, model_source or "openai", user_model, creativity=creativity)
 
                 response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
@@ -1035,8 +1045,10 @@ Provide the final categorization in the same JSON format:"""
                 "max_tokens": 1024,
                 "messages": messages,
             }
-            if creativity is not None:
-                payload["temperature"] = creativity
+            # Sampling params via the shared shaper (skips temperature on
+            # Anthropic models that 400 on it: Opus 4.7+, Sonnet 5, Fable 5).
+            from cat_stack._providers import apply_model_params
+            apply_model_params(payload, "anthropic", user_model, creativity=creativity)
 
             response = req.post(endpoint, headers=headers, json=payload, timeout=120)
             response.raise_for_status()
@@ -1078,10 +1090,13 @@ Provide the final categorization in the same JSON format:"""
             "contents": [{"parts": parts}],
             "generationConfig": {
                 "responseMimeType": "application/json",
-                **({"temperature": creativity} if creativity is not None else {}),
                 **({"thinkingConfig": {"thinkingBudget": thinking_budget}} if thinking_budget else {})
             }
         }
+        # Sampling params via the shared shaper (temperature lands inside the
+        # top-level generationConfig).
+        from cat_stack._providers import apply_model_params
+        apply_model_params(payload, "google", user_model, creativity=creativity)
 
         try:
             result = make_google_request(url, headers, payload)
@@ -1133,8 +1148,9 @@ Provide the final categorization in the same JSON format:"""
                     "model": user_model,
                     "messages": messages,
                 }
-                if creativity is not None:
-                    payload["temperature"] = creativity
+                # Sampling params via the shared shaper.
+                from cat_stack._providers import apply_model_params
+                apply_model_params(payload, "mistral", user_model, creativity=creativity)
 
                 response = req.post(endpoint, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
@@ -1539,6 +1555,9 @@ def explore_pdf_categories(
         """
         prompt_text = make_describe_prompt()
 
+        # Sampling params via the shared shaper.
+        from cat_stack._providers import apply_model_params
+
         try:
             # Anthropic - use native PDF support if model supports it
             if model_source == "anthropic" and _anthropic_supports_pdf(user_model):
@@ -1568,8 +1587,9 @@ def explore_pdf_categories(
                     "max_tokens": 4096,
                     "messages": [{"role": "user", "content": content}],
                 }
-                if creativity is not None:
-                    payload["temperature"] = creativity
+                # Skips temperature on Anthropic models that 400 on it:
+                # Opus 4.7+, Sonnet 5, Fable 5.
+                apply_model_params(payload, "anthropic", user_model, creativity=creativity)
                 resp = http_client.post(endpoint, headers=headers, json=payload, timeout=120)
                 resp.raise_for_status()
                 result = resp.json()
@@ -1599,8 +1619,9 @@ def explore_pdf_categories(
                     "max_tokens": 4096,
                     "messages": [{"role": "user", "content": content}],
                 }
-                if creativity is not None:
-                    payload["temperature"] = creativity
+                # Skips temperature on Anthropic models that 400 on it:
+                # Opus 4.7+, Sonnet 5, Fable 5.
+                apply_model_params(payload, "anthropic", user_model, creativity=creativity)
                 resp = http_client.post(endpoint, headers=headers, json=payload, timeout=120)
                 resp.raise_for_status()
                 result = resp.json()
@@ -1623,8 +1644,9 @@ def explore_pdf_categories(
                 ]
                 payload = {
                     "contents": [{"parts": parts}],
-                    "generationConfig": {**({"temperature": creativity} if creativity is not None else {})}
                 }
+                # Temperature lands inside the top-level generationConfig.
+                apply_model_params(payload, "google", user_model, creativity=creativity)
                 response = http_client.post(url, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
                 result = response.json()
@@ -1654,8 +1676,9 @@ def explore_pdf_categories(
                         ]
                     }]
                     payload = {"model": user_model, "messages": messages}
-                    if creativity is not None:
-                        payload["temperature"] = creativity
+                    # Skips temperature for OpenAI reasoning models, which
+                    # reject non-default values.
+                    apply_model_params(payload, model_source or "openai", user_model, creativity=creativity)
                     resp = http_client.post(endpoint, headers=headers, json=payload, timeout=120)
                     resp.raise_for_status()
                     return resp.json()["choices"][0]["message"]["content"]
@@ -1675,8 +1698,8 @@ def explore_pdf_categories(
                         ]
                     }]
                     payload = {"model": user_model, "messages": messages}
-                    if creativity is not None:
-                        payload["temperature"] = creativity
+                    # Sampling params via the shared shaper.
+                    apply_model_params(payload, "mistral", user_model, creativity=creativity)
                     resp = http_client.post(endpoint, headers=headers, json=payload, timeout=120)
                     resp.raise_for_status()
                     return resp.json()["choices"][0]["message"]["content"]
@@ -1687,6 +1710,9 @@ def explore_pdf_categories(
 
     def call_model_with_text(prompt_text):
         """Send concatenated text to the model."""
+        # Sampling params via the shared shaper.
+        from cat_stack._providers import apply_model_params
+
         try:
             if model_source in ["openai", "huggingface", "huggingface-together", "xai", "perplexity"]:
                 # Use requests directly instead of OpenAI SDK
@@ -1699,8 +1725,9 @@ def explore_pdf_categories(
                     "model": user_model,
                     "messages": [{"role": "user", "content": prompt_text}]
                 }
-                if creativity is not None:
-                    payload["temperature"] = creativity
+                # Skips temperature for OpenAI reasoning models, which
+                # reject non-default values.
+                apply_model_params(payload, model_source or "openai", user_model, creativity=creativity)
                 resp = http_client.post(endpoint, headers=headers, json=payload, timeout=120)
                 resp.raise_for_status()
                 return resp.json()["choices"][0]["message"]["content"]
@@ -1717,8 +1744,9 @@ def explore_pdf_categories(
                     "max_tokens": 2048,
                     "messages": [{"role": "user", "content": prompt_text}],
                 }
-                if creativity is not None:
-                    payload["temperature"] = creativity
+                # Skips temperature on Anthropic models that 400 on it:
+                # Opus 4.7+, Sonnet 5, Fable 5.
+                apply_model_params(payload, "anthropic", user_model, creativity=creativity)
                 resp = http_client.post(endpoint, headers=headers, json=payload, timeout=120)
                 resp.raise_for_status()
                 result = resp.json()
@@ -1732,8 +1760,9 @@ def explore_pdf_categories(
                 headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
                 payload = {
                     "contents": [{"parts": [{"text": prompt_text}]}],
-                    "generationConfig": {**({"temperature": creativity} if creativity is not None else {})}
                 }
+                # Temperature lands inside the top-level generationConfig.
+                apply_model_params(payload, "google", user_model, creativity=creativity)
                 response = http_client.post(url, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
                 result = response.json()
@@ -1752,8 +1781,8 @@ def explore_pdf_categories(
                     "model": user_model,
                     "messages": [{"role": "user", "content": prompt_text}]
                 }
-                if creativity is not None:
-                    payload["temperature"] = creativity
+                # Sampling params via the shared shaper.
+                apply_model_params(payload, "mistral", user_model, creativity=creativity)
                 resp = http_client.post(endpoint, headers=headers, json=payload, timeout=120)
                 resp.raise_for_status()
                 return resp.json()["choices"][0]["message"]["content"]
@@ -1767,6 +1796,9 @@ def explore_pdf_categories(
 
         Uses native PDF support for Anthropic (non-Haiku) and Google, converts to image for others.
         """
+        # Sampling params via the shared shaper.
+        from cat_stack._providers import apply_model_params
+
         try:
             # Anthropic - use native PDF support if model supports it
             if model_source == "anthropic" and _anthropic_supports_pdf(user_model):
@@ -1796,8 +1828,9 @@ def explore_pdf_categories(
                     "max_tokens": 2048,
                     "messages": [{"role": "user", "content": content}],
                 }
-                if creativity is not None:
-                    payload["temperature"] = creativity
+                # Skips temperature on Anthropic models that 400 on it:
+                # Opus 4.7+, Sonnet 5, Fable 5.
+                apply_model_params(payload, "anthropic", user_model, creativity=creativity)
                 resp = http_client.post(endpoint, headers=headers, json=payload, timeout=120)
                 resp.raise_for_status()
                 result = resp.json()
@@ -1827,8 +1860,9 @@ def explore_pdf_categories(
                     "max_tokens": 2048,
                     "messages": [{"role": "user", "content": content}],
                 }
-                if creativity is not None:
-                    payload["temperature"] = creativity
+                # Skips temperature on Anthropic models that 400 on it:
+                # Opus 4.7+, Sonnet 5, Fable 5.
+                apply_model_params(payload, "anthropic", user_model, creativity=creativity)
                 resp = http_client.post(endpoint, headers=headers, json=payload, timeout=120)
                 resp.raise_for_status()
                 result = resp.json()
@@ -1851,8 +1885,9 @@ def explore_pdf_categories(
                 ]
                 payload = {
                     "contents": [{"parts": parts}],
-                    "generationConfig": {**({"temperature": creativity} if creativity is not None else {})}
                 }
+                # Temperature lands inside the top-level generationConfig.
+                apply_model_params(payload, "google", user_model, creativity=creativity)
                 response = http_client.post(url, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
                 result = response.json()
@@ -1882,8 +1917,9 @@ def explore_pdf_categories(
                         ]
                     }]
                     payload = {"model": user_model, "messages": messages}
-                    if creativity is not None:
-                        payload["temperature"] = creativity
+                    # Skips temperature for OpenAI reasoning models, which
+                    # reject non-default values.
+                    apply_model_params(payload, model_source or "openai", user_model, creativity=creativity)
                     resp = http_client.post(endpoint, headers=headers, json=payload, timeout=120)
                     resp.raise_for_status()
                     return resp.json()["choices"][0]["message"]["content"]
@@ -1903,8 +1939,8 @@ def explore_pdf_categories(
                         ]
                     }]
                     payload = {"model": user_model, "messages": messages}
-                    if creativity is not None:
-                        payload["temperature"] = creativity
+                    # Sampling params via the shared shaper.
+                    apply_model_params(payload, "mistral", user_model, creativity=creativity)
                     resp = http_client.post(endpoint, headers=headers, json=payload, timeout=120)
                     resp.raise_for_status()
                     return resp.json()["choices"][0]["message"]["content"]
@@ -2043,6 +2079,9 @@ Categories (sorted by extraction frequency):
 Return ONLY a numbered list of {max_categories} categories.
 """.strip()
 
+    # Sampling params via the shared shaper.
+    from cat_stack._providers import apply_model_params
+
     try:
         if model_source in ["openai", "huggingface", "huggingface-together", "xai", "perplexity"]:
             # Use requests directly instead of OpenAI SDK
@@ -2055,8 +2094,9 @@ Return ONLY a numbered list of {max_categories} categories.
                 "model": user_model,
                 "messages": [{"role": "user", "content": second_prompt}]
             }
-            if creativity is not None:
-                payload["temperature"] = creativity
+            # Skips temperature for OpenAI reasoning models, which
+            # reject non-default values.
+            apply_model_params(payload, model_source or "openai", user_model, creativity=creativity)
             resp2 = http_client.post(endpoint, headers=headers, json=payload, timeout=120)
             resp2.raise_for_status()
             top_categories_text = resp2.json()["choices"][0]["message"]["content"]
@@ -2072,8 +2112,9 @@ Return ONLY a numbered list of {max_categories} categories.
                 "max_tokens": 2048,
                 "messages": [{"role": "user", "content": second_prompt}],
             }
-            if creativity is not None:
-                payload["temperature"] = creativity
+            # Skips temperature on Anthropic models that 400 on it:
+            # Opus 4.7+, Sonnet 5, Fable 5.
+            apply_model_params(payload, "anthropic", user_model, creativity=creativity)
             resp2 = http_client.post(endpoint, headers=headers, json=payload, timeout=120)
             resp2.raise_for_status()
             result = resp2.json()
@@ -2087,8 +2128,9 @@ Return ONLY a numbered list of {max_categories} categories.
             headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
             payload = {
                 "contents": [{"parts": [{"text": second_prompt}]}],
-                "generationConfig": {**({"temperature": creativity} if creativity is not None else {})}
             }
+            # Temperature lands inside the top-level generationConfig.
+            apply_model_params(payload, "google", user_model, creativity=creativity)
             response = http_client.post(url, headers=headers, json=payload, timeout=120)
             response.raise_for_status()
             res = response.json()
@@ -2104,8 +2146,8 @@ Return ONLY a numbered list of {max_categories} categories.
                 "model": user_model,
                 "messages": [{"role": "user", "content": second_prompt}]
             }
-            if creativity is not None:
-                payload["temperature"] = creativity
+            # Sampling params via the shared shaper.
+            apply_model_params(payload, "mistral", user_model, creativity=creativity)
             resp2 = http_client.post(endpoint, headers=headers, json=payload, timeout=120)
             resp2.raise_for_status()
             top_categories_text = resp2.json()["choices"][0]["message"]["content"]

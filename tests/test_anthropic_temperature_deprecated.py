@@ -1,12 +1,17 @@
 """
 Tests for the Anthropic `temperature`-deprecation handling.
 
-Background: newer Anthropic models (claude-opus-4-7, claude-opus-4-8)
-deprecated the `temperature` parameter and reject any request that sends it
-with HTTP 400:
+Background: newer Anthropic models reject the `temperature` sampling parameter
+with HTTP 400. It began with the Opus 4.7 / 4.8 line, which 400s with:
 
   {"type":"error","error":{"type":"invalid_request_error",
    "message":"`temperature` is deprecated for this model."}}
+
+and now also covers the Sonnet-5 / Fable-5 generation, which reject the
+parameter itself (wording does NOT say "deprecated"):
+
+  {"type":"error","error":{"type":"invalid_request_error",
+   "message":"`temperature` is not supported on this model."}}
 
 Pre-fix, _build_anthropic_payload unconditionally set `temperature`, so every
 request to those models failed and classify() produced all-NA columns.
@@ -14,13 +19,15 @@ request to those models failed and classify() produced all-NA columns.
 The fix mirrors the OpenAI reasoning-model handling:
   1. Proactive: a prefix table (_ANTHROPIC_TEMPERATURE_DEPRECATED) consulted
      by _anthropic_supports_temperature() makes _build_anthropic_payload skip
-     `temperature` up-front for the known-deprecated models.
-  2. Safety net: complete() detects "temperature" + "deprecated" in a 400
-     body, pops the param, caches the decision on the client, and retries —
-     covering future model families not yet in the table.
+     `temperature` up-front for the known-affected models (opus-4-7, opus-4-8,
+     sonnet-5, fable-5).
+  2. Safety net: complete() detects "temperature" + any parameter-rejection
+     phrase in a 400 body, pops the param, caches the decision on the client,
+     and retries — covering future model families not yet in the table.
 
 Models that still accept `temperature` (sonnet-4-6, opus-4-6, …) are
-unaffected.
+unaffected. A value-range 400 (e.g. temperature out of [0, 1]) is deliberately
+NOT caught, so a genuinely bad user value is surfaced rather than masked.
 """
 
 from unittest.mock import patch, MagicMock
@@ -58,9 +65,24 @@ TEMP_DEPRECATED_BODY = (
     '"message":"`temperature` is deprecated for this model."}}'
 )
 
+# Sonnet-5 / Fable-5 reject the param without the word "deprecated".
+TEMP_UNSUPPORTED_BODY = (
+    '{"type":"error","error":{"type":"invalid_request_error",'
+    '"message":"`temperature` is not supported on this model."}}'
+)
+
+# A value-range 400 — must NOT be treated as a param rejection.
+TEMP_RANGE_BODY = (
+    '{"type":"error","error":{"type":"invalid_request_error",'
+    '"message":"temperature: Input should be less than or equal to 1"}}'
+)
+
 
 class TestCapabilityHelper:
-    @pytest.mark.parametrize("model", ["claude-opus-4-7", "claude-opus-4-8"])
+    @pytest.mark.parametrize(
+        "model",
+        ["claude-opus-4-7", "claude-opus-4-8", "claude-sonnet-5", "claude-fable-5"],
+    )
     def test_known_deprecated_models_report_unsupported(self, model):
         assert _anthropic_supports_temperature(model) is False
 
@@ -83,8 +105,20 @@ class TestProactiveSkip:
         )
         assert "temperature" not in payload
 
+    @pytest.mark.parametrize("model", ["claude-sonnet-5", "claude-fable-5"])
+    def test_new_generation_payload_omits_temperature(self, model):
+        """Sonnet 5 / Fable 5 also reject temperature — skip it up-front."""
+        client = _anthropic_client(model)
+        payload = client._build_anthropic_payload(
+            [{"role": "user", "content": "hi"}],
+            json_schema={"type": "object"},
+            creativity=0.3,
+            thinking_budget=0,
+        )
+        assert "temperature" not in payload
+
     def test_sonnet_payload_keeps_temperature(self):
-        """Regression guard: sonnet must still receive temperature so the
+        """Regression guard: sonnet-4-6 must still receive temperature so the
         deterministic-output behavior the project relies on is unchanged."""
         client = _anthropic_client("claude-sonnet-4-6")
         payload = client._build_anthropic_payload(
@@ -124,6 +158,44 @@ class TestRuntimeFallback:
         )
         # Decision cached on the client for subsequent rows.
         assert getattr(client, "_anthropic_temperature_unsupported", False) is True
+
+    @patch("cat_stack._providers.time.sleep")
+    @patch("cat_stack._providers.requests.post")
+    def test_400_unsupported_wording_strips_and_retries(self, mock_post, mock_sleep):
+        """Sonnet-5 / Fable-5 reject temperature without the word 'deprecated';
+        the broadened match must still strip + retry."""
+        first = _resp(status_code=400, body=TEMP_UNSUPPORTED_BODY)
+        second = _resp(
+            status_code=200,
+            json_data={"content": [{"type": "text", "text": '{"1":"1"}'}]},
+        )
+        mock_post.side_effect = [first, second]
+
+        client = _anthropic_client("claude-sonnet-6-future")
+        result, err = client.complete(
+            messages=[{"role": "user", "content": "classify this"}],
+            creativity=0,
+        )
+        assert err is None, f"unexpected error: {err}"
+        second_payload = mock_post.call_args_list[1].kwargs["json"]
+        assert "temperature" not in second_payload
+        assert getattr(client, "_anthropic_temperature_unsupported", False) is True
+
+    @patch("cat_stack._providers.time.sleep")
+    @patch("cat_stack._providers.requests.post")
+    def test_temperature_range_400_not_caught(self, mock_post, mock_sleep):
+        """A value-range 400 mentions 'temperature' but is a bad user value, not
+        a param rejection — it must NOT be silently stripped/masked."""
+        mock_post.return_value = _resp(400, TEMP_RANGE_BODY)
+        client = _anthropic_client("claude-sonnet-4-6")
+        result, err = client.complete(
+            messages=[{"role": "user", "content": "x"}],
+            creativity=2.0,
+            max_retries=1,
+        )
+        assert result is None
+        assert err is not None
+        assert getattr(client, "_anthropic_temperature_unsupported", False) is False
 
     @patch("cat_stack._providers.time.sleep")
     @patch("cat_stack._providers.requests.post")

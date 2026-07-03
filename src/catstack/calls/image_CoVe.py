@@ -22,13 +22,19 @@ def image_chain_of_verification_openai(
         image_content: The image content in OpenAI format (list with image_url dict)
     """
     try:
+        # Sampling params via the shared shaper (skips temperature for OpenAI
+        # reasoning models, which reject non-default values). Computed once,
+        # reused across the 3 steps.
+        from cat_stack._providers import apply_model_params
+        _params = apply_model_params({}, "openai", user_model, creativity=creativity)
+
         # STEP 2: Generate verification questions (text only - questions about the categorization)
         step2_filled = step2_prompt.replace('<<INITIAL_REPLY>>', initial_reply)
 
         verification_response = client.chat.completions.create(
             model=user_model,
             messages=[{'role': 'user', 'content': step2_filled}],
-            **({"temperature": creativity} if creativity is not None else {})
+            **_params
         )
 
         verification_questions = verification_response.choices[0].message.content
@@ -53,7 +59,7 @@ def image_chain_of_verification_openai(
             answer_response = client.chat.completions.create(
                 model=user_model,
                 messages=[{'role': 'user', 'content': message_content}],
-                **({"temperature": creativity} if creativity is not None else {})
+                **_params
             )
 
             answer = answer_response.choices[0].message.content
@@ -76,7 +82,7 @@ def image_chain_of_verification_openai(
             model=user_model,
             messages=[{'role': 'user', 'content': final_message_content}],
             response_format={"type": "json_object"},
-            **({"temperature": creativity} if creativity is not None else {})
+            **_params
         )
 
         verified_reply = final_response.choices[0].message.content
@@ -129,8 +135,10 @@ def image_chain_of_verification_anthropic(
             "max_tokens": max_tokens,
             "messages": messages,
         }
-        if creativity is not None:
-            payload["temperature"] = creativity
+        # Sampling params via the shared shaper (skips temperature on
+        # Anthropic models that 400 on it: Opus 4.7+, Sonnet 5, Fable 5).
+        from cat_stack._providers import apply_model_params
+        apply_model_params(payload, "anthropic", user_model, creativity=creativity)
 
         response = requests.post(endpoint, headers=headers, json=payload, timeout=120)
         response.raise_for_status()
@@ -220,15 +228,17 @@ def image_chain_of_verification_google(
     import time
 
     try:
+        # Sampling params via the shared shaper (this variant doesn't receive
+        # the model name; the Google branch keys off the provider only).
+        from cat_stack._providers import apply_model_params
+
         # STEP 2: Generate verification questions (text only)
         step2_filled = step2_prompt.replace('<<INITIAL_REPLY>>', initial_reply)
 
-        payload_step2 = {
-            "contents": [{
-                "parts": [{"text": step2_filled}]
-            }],
-            **({"generationConfig": {"temperature": creativity}} if creativity is not None else {})
-        }
+        payload_step2 = apply_model_params(
+            {"contents": [{"parts": [{"text": step2_filled}]}]},
+            "google", "", creativity=creativity,
+        )
 
         result_step2 = make_google_request(url, headers, payload_step2)
         verification_questions = result_step2["candidates"][0]["content"]["parts"][0]["text"]
@@ -246,20 +256,22 @@ def image_chain_of_verification_google(
             step3_filled = step3_prompt.replace('<<QUESTION>>', question)
 
             # Include image in the verification question
-            payload_step3 = {
-                "contents": [{
-                    "parts": [
-                        {"text": step3_filled},
-                        {
-                            "inline_data": {
-                                "mime_type": mime_type,
-                                "data": image_data
+            payload_step3 = apply_model_params(
+                {
+                    "contents": [{
+                        "parts": [
+                            {"text": step3_filled},
+                            {
+                                "inline_data": {
+                                    "mime_type": mime_type,
+                                    "data": image_data
+                                }
                             }
-                        }
-                    ]
-                }],
-                **({"generationConfig": {"temperature": creativity}} if creativity is not None else {})
-            }
+                        ]
+                    }],
+                },
+                "google", "", creativity=creativity,
+            )
 
             result_step3 = make_google_request(url, headers, payload_step3)
             answer = result_step3["candidates"][0]["content"]["parts"][0]["text"]
@@ -274,23 +286,23 @@ def image_chain_of_verification_google(
             .replace('<<VERIFICATION_QA>>', verification_qa_text))
 
         # Include image in final categorization
-        payload_step4 = {
-            "contents": [{
-                "parts": [
-                    {"text": step4_filled},
-                    {
-                        "inline_data": {
-                            "mime_type": mime_type,
-                            "data": image_data
+        payload_step4 = apply_model_params(
+            {
+                "contents": [{
+                    "parts": [
+                        {"text": step4_filled},
+                        {
+                            "inline_data": {
+                                "mime_type": mime_type,
+                                "data": image_data
+                            }
                         }
-                    }
-                ]
-            }],
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                **({"temperature": creativity} if creativity is not None else {})
-            }
-        }
+                    ]
+                }],
+                "generationConfig": {"responseMimeType": "application/json"},
+            },
+            "google", "", creativity=creativity,
+        )
 
         result_step4 = make_google_request(url, headers, payload_step4)
         verified_reply = result_step4["candidates"][0]["content"]["parts"][0]["text"]
@@ -321,13 +333,18 @@ def image_chain_of_verification_mistral(
         image_content: The image content in Mistral format (dict with image_url)
     """
     try:
+        # Sampling params via the shared shaper. Computed once, reused
+        # across the 3 steps.
+        from cat_stack._providers import apply_model_params
+        _params = apply_model_params({}, "mistral", user_model, creativity=creativity)
+
         # STEP 2: Generate verification questions (text only)
         step2_filled = step2_prompt.replace('<<INITIAL_REPLY>>', initial_reply)
 
         verification_response = client.chat.complete(
             model=user_model,
             messages=[{'role': 'user', 'content': step2_filled}],
-            **({"temperature": creativity} if creativity is not None else {})
+            **_params
         )
 
         verification_questions = verification_response.choices[0].message.content
@@ -352,7 +369,7 @@ def image_chain_of_verification_mistral(
             answer_response = client.chat.complete(
                 model=user_model,
                 messages=[{'role': 'user', 'content': message_content}],
-                **({"temperature": creativity} if creativity is not None else {})
+                **_params
             )
 
             answer = answer_response.choices[0].message.content
@@ -375,7 +392,7 @@ def image_chain_of_verification_mistral(
             model=user_model,
             messages=[{'role': 'user', 'content': final_message_content}],
             response_format={"type": "json_object"},
-            **({"temperature": creativity} if creativity is not None else {})
+            **_params
         )
 
         verified_reply = final_response.choices[0].message.content

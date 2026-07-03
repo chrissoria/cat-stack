@@ -41,8 +41,10 @@ def get_stepback_insight_openai(
         "messages": [{"role": "user", "content": stepback}],
     }
 
-    if creativity is not None:
-        payload["temperature"] = creativity
+    # Sampling params via the shared shaper (skips temperature for OpenAI
+    # reasoning models, which reject non-default values).
+    from cat_stack._providers import apply_model_params
+    apply_model_params(payload, model_source or "openai", user_model, creativity=creativity)
 
     try:
         response = requests.post(endpoint, headers=headers, json=payload, timeout=120)
@@ -84,8 +86,10 @@ def get_stepback_insight_anthropic(
         "messages": [{"role": "user", "content": stepback}],
     }
 
-    if creativity is not None:
-        payload["temperature"] = creativity
+    # Sampling params via the shared shaper (skips temperature on Anthropic
+    # models that 400 on it: Opus 4.7+, Sonnet 5, Fable 5).
+    from cat_stack._providers import apply_model_params
+    apply_model_params(payload, "anthropic", user_model, creativity=creativity)
 
     try:
         response = requests.post(endpoint, headers=headers, json=payload, timeout=120)
@@ -123,13 +127,16 @@ def get_stepback_insight_google(
     }
     
     payload = {
-        "contents": [{
-            "parts": [{"text": stepback}],
-
-            **({"generationConfig": {"temperature": creativity}} if creativity is not None else {})
-        }]
+        "contents": [{"parts": [{"text": stepback}]}],
     }
-    
+
+    # Sampling params via the shared shaper. Also fixes placement: Gemini
+    # takes generationConfig at the top level of the request body (it was
+    # previously spread inside contents[0], where it is not honored).
+    from cat_stack._providers import apply_model_params
+    apply_model_params(payload, "google", user_model, creativity=creativity)
+
+
     try:
         response = requests.post(url, headers=headers, json=payload)
         response.raise_for_status()  # Raise error for bad status codes
@@ -165,8 +172,10 @@ def get_stepback_insight_mistral(
         "model": user_model,
         "messages": [{'role': 'user', 'content': stepback}],
     }
-    if creativity is not None:
-        payload["temperature"] = creativity
+
+    # Sampling params via the shared shaper.
+    from cat_stack._providers import apply_model_params
+    apply_model_params(payload, "mistral", user_model, creativity=creativity)
 
     try:
         response = requests.post(endpoint, headers=headers, json=payload, timeout=120)

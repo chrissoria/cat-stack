@@ -5,7 +5,99 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0b6] - 2026-07-03
+
+### Changed
+- **Sampling/reasoning param handling is centralized in
+  `apply_model_params()`** (`_providers.py`, exported). One function now
+  decides which params a given provider+model accepts and in what form —
+  Anthropic temperature gating + adaptive-vs-budget thinking + max_tokens
+  headroom, OpenAI reasoning-model temperature skip + `reasoning_effort`,
+  Google `generationConfig` temperature/`thinkingConfig`, xAI
+  `reasoning_effort`, Ollama `think`, HuggingFace `chat_template_kwargs`.
+  Every payload builder routes through it: the central `_build_*_payload`
+  methods (and therefore `classify`/`explore`/`extract`/`summarize` and the
+  batch API), all `calls/` strategy leaves (stepback / CoVe / top_n and their
+  image/pdf variants), the direct per-provider builders in
+  `image_functions.py` / `pdf_functions.py`, and `_call_google_multimodal`.
+  Future provider quirks are fixed once instead of at every call site.
+  Runtime 400 fallbacks remain in `complete()` (its cached capability flags
+  feed the shaper via `UnifiedLLMClient._param_overrides()`); the direct-HTTP
+  leaves get correct up-front params for known model families but still have
+  no runtime net.
+- **`thinking_budget` now maps consistently across providers.** It stays a
+  single token-count knob, but providers whose API takes an effort *enum*
+  (rather than a literal token budget) previously collapsed every positive
+  budget to `"high"`, so the same value behaved very differently by provider.
+  A shared table (`_thinking_budget_to_effort`) now grades a positive budget
+  into `low` / `medium` / `high` (`<=2048` low, `<=8192` medium, else high) and
+  every effort-enum provider consults it: OpenAI/xAI `reasoning_effort`,
+  Anthropic-adaptive `output_config.effort`, and Ollama gpt-oss `think`. Token
+  providers (Google, legacy Anthropic) still send the literal count; bool-only
+  families (Ollama qwen3/deepseek, HF Qwen3) can only toggle on/off. **Behavior
+  change:** OpenAI and xAI reasoning models now send graded effort — a small
+  `thinking_budget` sends `"low"`/`"medium"` where it previously sent `"high"`.
+  Thresholds are tunable in one place (`_THINKING_EFFORT_*`).
+
+### Fixed
+- **Extended thinking 400s on current Anthropic models when
+  `thinking_budget > 0`.** `_build_anthropic_payload` always sent the legacy
+  fixed-budget form `thinking: {"type": "enabled", "budget_tokens": N}`, which
+  is rejected with a hard 400 (no fallback) on `claude-opus-4-7` /
+  `claude-opus-4-8` / `claude-sonnet-5` / `claude-fable-5` — those generations
+  require adaptive thinking. cat-stack now emits `thinking: {"type":
+  "adaptive"}` for those models (skipping `temperature`, which they also
+  reject) while keeping the explicit budget for older models (Opus 4.6, Sonnet
+  4.6, …), selected by a prefix table with a runtime 400 safety net for future
+  families. Also hardened `_parse_anthropic_response` to prefer a `tool_use`
+  block over a text preamble, since the thinking path uses
+  `tool_choice="auto"` and the model may narrate before the structured tool
+  call. Default `classify()` calls are unaffected (`thinking_budget=0` sends no
+  `thinking`).
+- **`temperature` 400s on Sonnet-5 / Fable-5 Anthropic models when
+  `creativity` is set.** The up-front skip list of models that reject the
+  `temperature` sampling parameter only covered `claude-opus-4-7` /
+  `claude-opus-4-8`, so `classify(..., creativity=<value>)` on
+  `claude-sonnet-5` or `claude-fable-5` sent `temperature` and got a hard 400.
+  Added both prefixes to the skip list, and broadened the runtime 400 safety
+  net in `complete()` to match any parameter-rejection wording (Sonnet 5 /
+  Fable 5 reject the param rather than calling it "deprecated"), not just the
+  literal "deprecated" string. Default `classify()` calls are unaffected
+  (`creativity=None` sends no `temperature`).
+- **`temperature` 400s in the `calls/` strategy leaves (stepback, CoVe,
+  top_n).** These per-strategy modules build the Anthropic payload directly
+  (bypassing `_build_anthropic_payload`), so they still sent `temperature` on
+  the newest models and — because they swallow exceptions — failed *silently*
+  (lost stepback insight / CoVe verification / top_n categories) on
+  `claude-opus-4-7`+, `claude-sonnet-5`, `claude-fable-5`. Each leaf now gates
+  `temperature` with the same `_anthropic_supports_temperature()` check. These
+  paths back the classify strategy options; `explore()` routes through
+  `complete()` and was already covered by the central fix. (Superseded in the
+  same release by the `apply_model_params()` centralization above, which
+  extends the fix to every remaining direct payload builder.)
+- **`temperature` 400s in the remaining direct Anthropic payload builders.**
+  The image/pdf strategy leaves (`calls/image_stepback.py`,
+  `calls/pdf_stepback.py`, `calls/image_CoVe.py`, `calls/pdf_CoVe.py`) and
+  the per-provider builders inside `image_functions.py` / `pdf_functions.py`
+  still sent `temperature` unconditionally, so image/PDF classification with
+  `creativity` set degraded silently on `claude-opus-4-7`+, `claude-sonnet-5`,
+  `claude-fable-5`. All now route through `apply_model_params()`. The same
+  migration also stops sending `temperature` to OpenAI reasoning models
+  (o-series / GPT-5) from these leaves — they reject non-default values.
+- **Misplaced `generationConfig` broke Google stepback whenever `creativity`
+  was set.** `get_stepback_insight_google` (`calls/stepback.py`) spread
+  `generationConfig` *inside* `contents[0]` instead of at the top level of
+  the request body. Gemini hard-400s on that shape (verified live:
+  `Unknown name "generationConfig" at 'contents[0]'`), and the leaf swallows
+  exceptions — so any Google classify run using the stepback strategy with
+  `creativity` set silently lost the stepback insight entirely. The shaper
+  migration places it correctly.
+- **`_call_google_multimodal` (PDF/image ensemble path) now shapes Google
+  params like the text path.** Previously `thinking_budget=0` sent nothing
+  (leaving Gemini's default thinking ON, unlike the text path which sends an
+  explicit zero since v1.6.8) and positive budgets skipped the 128-token
+  floor. It now routes through `apply_model_params()` with the client's
+  cached thinking floor.
 
 ## [2.0.0b5] - 2026-06-15
 

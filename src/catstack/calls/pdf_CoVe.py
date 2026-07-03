@@ -42,8 +42,10 @@ def pdf_chain_of_verification_openai(
 
     def make_openai_request(messages, json_mode=False):
         payload = {"model": user_model, "messages": messages}
-        if creativity is not None:
-            payload["temperature"] = creativity
+        # Sampling params via the shared shaper (skips temperature for OpenAI
+        # reasoning models, which reject non-default values).
+        from cat_stack._providers import apply_model_params
+        apply_model_params(payload, "openai", user_model, creativity=creativity)
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
         response = requests.post(endpoint, headers=headers, json=payload, timeout=120)
@@ -137,8 +139,10 @@ def pdf_chain_of_verification_anthropic(
             "max_tokens": max_tokens,
             "messages": messages,
         }
-        if creativity is not None:
-            payload["temperature"] = creativity
+        # Sampling params via the shared shaper (skips temperature on
+        # Anthropic models that 400 on it: Opus 4.7+, Sonnet 5, Fable 5).
+        from cat_stack._providers import apply_model_params
+        apply_model_params(payload, "anthropic", user_model, creativity=creativity)
 
         response = requests.post(endpoint, headers=headers, json=payload, timeout=120)
         response.raise_for_status()
@@ -228,15 +232,17 @@ def pdf_chain_of_verification_google(
     import time
 
     try:
+        # Sampling params via the shared shaper (this variant doesn't receive
+        # the model name; the Google branch keys off the provider only).
+        from cat_stack._providers import apply_model_params
+
         # STEP 2: Generate verification questions (text only)
         step2_filled = step2_prompt.replace('<<INITIAL_REPLY>>', initial_reply)
 
-        payload_step2 = {
-            "contents": [{
-                "parts": [{"text": step2_filled}]
-            }],
-            **({"generationConfig": {"temperature": creativity}} if creativity is not None else {})
-        }
+        payload_step2 = apply_model_params(
+            {"contents": [{"parts": [{"text": step2_filled}]}]},
+            "google", "", creativity=creativity,
+        )
 
         result_step2 = make_google_request(url, headers, payload_step2)
         verification_questions = result_step2["candidates"][0]["content"]["parts"][0]["text"]
@@ -254,20 +260,22 @@ def pdf_chain_of_verification_google(
             step3_filled = step3_prompt.replace('<<QUESTION>>', question)
 
             # Include PDF page in the verification question
-            payload_step3 = {
-                "contents": [{
-                    "parts": [
-                        {"text": step3_filled},
-                        {
-                            "inline_data": {
-                                "mime_type": mime_type,
-                                "data": pdf_data
+            payload_step3 = apply_model_params(
+                {
+                    "contents": [{
+                        "parts": [
+                            {"text": step3_filled},
+                            {
+                                "inline_data": {
+                                    "mime_type": mime_type,
+                                    "data": pdf_data
+                                }
                             }
-                        }
-                    ]
-                }],
-                **({"generationConfig": {"temperature": creativity}} if creativity is not None else {})
-            }
+                        ]
+                    }],
+                },
+                "google", "", creativity=creativity,
+            )
 
             result_step3 = make_google_request(url, headers, payload_step3)
             answer = result_step3["candidates"][0]["content"]["parts"][0]["text"]
@@ -282,23 +290,23 @@ def pdf_chain_of_verification_google(
             .replace('<<VERIFICATION_QA>>', verification_qa_text))
 
         # Include PDF page in final categorization
-        payload_step4 = {
-            "contents": [{
-                "parts": [
-                    {"text": step4_filled},
-                    {
-                        "inline_data": {
-                            "mime_type": mime_type,
-                            "data": pdf_data
+        payload_step4 = apply_model_params(
+            {
+                "contents": [{
+                    "parts": [
+                        {"text": step4_filled},
+                        {
+                            "inline_data": {
+                                "mime_type": mime_type,
+                                "data": pdf_data
+                            }
                         }
-                    }
-                ]
-            }],
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                **({"temperature": creativity} if creativity is not None else {})
-            }
-        }
+                    ]
+                }],
+                "generationConfig": {"responseMimeType": "application/json"},
+            },
+            "google", "", creativity=creativity,
+        )
 
         result_step4 = make_google_request(url, headers, payload_step4)
         verified_reply = result_step4["candidates"][0]["content"]["parts"][0]["text"]
@@ -345,8 +353,9 @@ def pdf_chain_of_verification_mistral(
 
     def make_mistral_request(messages, json_mode=False):
         payload = {"model": user_model, "messages": messages}
-        if creativity is not None:
-            payload["temperature"] = creativity
+        # Sampling params via the shared shaper.
+        from cat_stack._providers import apply_model_params
+        apply_model_params(payload, "mistral", user_model, creativity=creativity)
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
         response = requests.post(endpoint, headers=headers, json=payload, timeout=120)
