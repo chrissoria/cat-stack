@@ -41,6 +41,86 @@ from .image_functions import image_multi_class
 from .pdf_functions import pdf_multi_class
 
 
+# Minimum estimated API calls (rows x batch-capable models) before the
+# batch-mode cost tip is worth printing. Below this, the absolute savings
+# are small and the async round-trip isn't worth suggesting.
+_BATCH_NUDGE_MIN_REQUESTS = 500
+
+
+def _maybe_print_batch_nudge(
+    input_data,
+    models,
+    categories_per_call,
+    chain_of_verification,
+    embedding_tiebreaker,
+    progress_callback,
+):
+    """Print a one-line cost tip when a synchronous run qualifies for
+    batch_mode=True. Checks the same eligibility rules the batch path
+    enforces, so the tip is only shown when opting in would actually work."""
+    # Options the batch path rejects or ignores -> no tip.
+    if (
+        categories_per_call is not None
+        or chain_of_verification
+        or embedding_tiebreaker
+        or progress_callback is not None
+    ):
+        return
+
+    try:
+        n_rows = len(input_data)
+    except TypeError:
+        return
+    if n_rows == 0:
+        return
+
+    # Batch mode is text-only.
+    from .text_functions_ensemble import _detect_input_type
+    if _detect_input_type(input_data) != "text":
+        return
+
+    # Count models on batch-capable providers (openai/anthropic/google/
+    # mistral/xai). `models` is already normalized to a list here; provider
+    # may still be "auto"/None in the spec, so resolve it the same way
+    # prepare_model_configs will.
+    from ._batch import UNSUPPORTED_BATCH_PROVIDERS
+    from ._providers import detect_provider
+
+    n_capable = 0
+    for m in models:
+        name, provider = None, None
+        if isinstance(m, (list, tuple)):
+            name = m[0] if len(m) >= 1 else None
+            provider = m[1] if len(m) >= 2 else None
+        elif isinstance(m, dict):
+            name = m.get("model")
+            provider = m.get("provider")
+        elif isinstance(m, str):
+            name = m
+        if not provider or provider == "auto":
+            if not name:
+                continue
+            try:
+                provider = detect_provider(name)
+            except Exception:
+                continue
+        if provider not in UNSUPPORTED_BATCH_PROVIDERS:
+            n_capable += 1
+
+    est_requests = n_rows * n_capable
+    if n_capable == 0 or est_requests < _BATCH_NUDGE_MIN_REQUESTS:
+        return
+
+    print(
+        f"\n[CatLLM] Tip: this run (~{est_requests:,} API calls across "
+        f"{n_capable} batch-capable model(s)) qualifies for batch_mode=True.\n"
+        "  The async batch API costs ~50% less with identical prompts and\n"
+        "  results, and gets higher rate limits. The trade-off is latency:\n"
+        "  the job completes asynchronously (typically minutes to a few\n"
+        "  hours; 24h worst case). Add batch_mode=True to opt in.\n"
+    )
+
+
 def classify(
     input_data,
     categories,
@@ -168,6 +248,8 @@ def classify(
             Providers without batch API (HuggingFace, Perplexity, Ollama) fall back to
             synchronous calls and are merged in with the batch results.
             Incompatible with: PDF/image input, progress_callback.
+            Large qualifying synchronous runs (>= ~500 estimated API calls)
+            print a one-line tip suggesting batch_mode=True.
         batch_poll_interval (float): Seconds between batch job status checks. Default 30.
         batch_timeout (float): Max seconds to wait for batch completion. Default 86400 (24h).
         models (list): For multi-model mode, list of (model, provider, api_key) tuples.
@@ -370,6 +452,14 @@ def classify(
         )
         if not description:
             description = survey_question
+    elif description:
+        # `description` is the canonical name, but downstream the text-prompt
+        # "Context:" line, the step-back question, and the categories="auto"
+        # requirement all still key off `survey_question`. Mirror it so
+        # description-only callers — including every domain wrapper
+        # (cat-survey, cat-pol, cat-web, cat-ademic) — keep their context
+        # framing instead of silently losing it.
+        survey_question = description
 
     # Build models list
     if models is None:
@@ -619,6 +709,28 @@ def classify(
         print()
         print("\n\n".join(_strategy_warnings))
         print()
+
+    # =========================================================================
+    # Batch-mode cost nudge
+    # =========================================================================
+    # One-line tip when a large synchronous run would qualify for the async
+    # batch API (~50% cheaper, higher rate limits, identical prompts and
+    # results). Fires only when batch_mode=True would actually accept this
+    # run — text input, no batch-incompatible options, at least one
+    # batch-capable provider — so the tip is never a dead end. Informational
+    # only: must never affect or abort the run.
+    if not batch_mode:
+        try:
+            _maybe_print_batch_nudge(
+                input_data=input_data,
+                models=models,
+                categories_per_call=categories_per_call,
+                chain_of_verification=chain_of_verification,
+                embedding_tiebreaker=embedding_tiebreaker,
+                progress_callback=progress_callback,
+            )
+        except Exception:
+            pass
 
     # =========================================================================
     # JSON formatter fallback

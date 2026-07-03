@@ -5,6 +5,39 @@ All notable changes to CatLLM will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-07-03
+
+First stable release of the 2.0 line — promotes 2.0.0b1–2.0.0b6 (theme
+collapsing, centralized provider param shaping, current-generation Anthropic
+support, graded cross-provider `thinking_budget`) to stable. Domain packages
+pinning `cat-stack>=1.6.3` pick this release up automatically.
+
+### Fixed
+- **`classify(description=...)` silently lost the prompt context line for
+  text input.** `description` is the documented canonical replacement for the
+  deprecated `survey_question=`, but downstream prompt assembly (the
+  `Context: ...` line, the step-back question, and the `categories="auto"`
+  requirement) still keyed off `survey_question` — so callers passing only
+  `description=`, which includes the cat-survey / cat-pol / cat-web /
+  cat-ademic classify wrappers, got no context framing at all (and step-back
+  / auto-categories raised despite context being provided). `description` is
+  now mirrored into `survey_question` when the latter isn't given, restoring
+  the exact prompt those callers produced before the rename. Callers passing
+  both (e.g. cat-vader: `survey_question=` feed question +
+  `description=` platform context) keep the two channels distinct.
+
+### Added
+- **Batch-mode cost nudge in `classify()`.** Large synchronous text runs now
+  print a one-line tip when they qualify for `batch_mode=True` (~50% cheaper
+  via the async batch API, higher rate limits, identical prompts/results).
+  The tip only fires when opting in would actually work — text input, ≥ ~500
+  estimated API calls (rows × batch-capable models), no batch-incompatible
+  options (`categories_per_call`, `chain_of_verification`,
+  `embedding_tiebreaker`, `progress_callback`), and at least one model on a
+  provider with a batch API (OpenAI/Anthropic/Google/Mistral/xAI). Purely
+  informational: it never changes or aborts the run, and any internal error
+  in the eligibility check is swallowed.
+
 ## [2.0.0b6] - 2026-07-03
 
 ### Changed
