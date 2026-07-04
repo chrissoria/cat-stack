@@ -1,9 +1,9 @@
-"""Dispatch tests for model_source='claude-agent' (the cat-agent backend).
+"""Dispatch tests for model_source='claude-agent' (the cat-claws backend).
 
-Mocked — cat-agent is patched so no live agent CLI is needed. Verifies cat-stack
+Mocked — cat-claws is patched so no live agent CLI is needed. Verifies cat-stack
 routes the new provider to the adapter, flattens messages the same way the
 claude-code CLI path does, surfaces adapter errors, and degrades politely when
-cat-agent is not installed. All behavior is gated on the new provider value, so
+cat-claws is not installed. All behavior is gated on the new provider value, so
 these tests touch no existing provider path.
 """
 import sys
@@ -40,7 +40,7 @@ def test_dispatch_routes_to_adapter_and_flattens_messages():
                             model=model, thinking_budget=thinking_budget)
             return '{"1": "1"}', None
 
-    with patch("catagent._adapters.get_adapter", return_value=FakeAdapter()):
+    with patch("catclaws._adapters.get_adapter", return_value=FakeAdapter()):
         text, err = _client().complete(
             messages=[
                 {"role": "system", "content": "sys A"},
@@ -60,14 +60,14 @@ def test_dispatch_surfaces_adapter_error():
         async def one_shot(self, prompt, system_prompt, model, thinking_budget=0):
             return None, "rate-limited: five_hour limit reached"
 
-    with patch("catagent._adapters.get_adapter", return_value=FakeAdapter()):
+    with patch("catclaws._adapters.get_adapter", return_value=FakeAdapter()):
         text, err = _client().complete(messages=[{"role": "user", "content": "x"}])
     assert text is None and "rate-limited" in err
 
 
 def test_missing_cat_agent_degrades_politely():
-    # Simulate cat-agent not installed: importing catagent._adapters raises.
-    with patch.dict(sys.modules, {"catagent._adapters": None}):
+    # Simulate cat-claws not installed: importing catclaws._adapters raises.
+    with patch.dict(sys.modules, {"catclaws._adapters": None}):
         text, err = _client().complete(messages=[{"role": "user", "content": "x"}])
     assert text is None
     assert "pip install cat-stack[agent]" in err  # hint, not a raw traceback

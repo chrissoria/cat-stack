@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-07-03
+
 ### Added
 - **`model_source="claude-agent"` provider** — classify through a Claude
-  subscription via the cat-agent SDK backend (no API key), alongside the
+  subscription via the cat-claws SDK backend (no API key), alongside the
   existing `claude-code` subprocess shim. Dispatch mirrors the `claude-code`
   branch exactly: a `PROVIDER_CONFIG` entry, `_detect_model_source`
   recognition, a `_call_claude_agent` method (async adapter driven via
@@ -18,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extra (`pip install cat-stack[agent]`). Entirely additive and gated on the
   new provider value: the full pre-existing test suite passes unchanged
   (507→507) plus 5 new dispatch tests, and a live `complete()` classified
-  correctly through the subscription. Requires the cat-agent package
+  correctly through the subscription. Requires the cat-claws package
   (published separately); without it the provider returns a clear
   `pip install cat-stack[agent]` hint rather than a traceback.
 

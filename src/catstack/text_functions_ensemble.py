@@ -662,13 +662,13 @@ def prepare_model_configs(
                 )
         elif detected_provider == "claude-agent":
             try:
-                import catagent  # noqa: F401
+                import catclaws  # noqa: F401
             except ImportError:
                 raise ConnectionError(
                     "\n" + "="*60 + "\n"
                     "  CAT-AGENT NOT INSTALLED\n"
                     "="*60 + "\n\n"
-                    "The cat-agent package is required to use claude-agent as a provider.\n"
+                    "The cat-claws package is required to use claude-agent as a provider.\n"
                     "Install: pip install cat-stack[agent]\n"
                     + "="*60
                 )

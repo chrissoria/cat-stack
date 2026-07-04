@@ -722,7 +722,7 @@ PROVIDER_CONFIG = {
         "auth_prefix": "",
     },
     "claude-agent": {
-        "endpoint": None,  # Uses the cat-agent SDK adapter, not HTTP
+        "endpoint": None,  # Uses the cat-claws SDK adapter, not HTTP
         "auth_header": None,
         "auth_prefix": "",
     },
@@ -1216,10 +1216,10 @@ class UnifiedLLMClient:
         messages: list,
         thinking_budget: int = None,
     ) -> tuple[str, str | None]:
-        """Route one completion through the cat-agent SDK adapter.
+        """Route one completion through the cat-claws SDK adapter.
 
         Like `_call_claude_cli`, this runs on the user's Claude subscription
-        (no API key) and returns the same (text, error) contract. cat-agent is
+        (no API key) and returns the same (text, error) contract. cat-claws is
         an optional dependency (the `[agent]` extra); a missing install
         degrades to a clear install hint rather than an ImportError traceback.
 
@@ -1229,10 +1229,10 @@ class UnifiedLLMClient:
         loop. Message flattening mirrors _call_claude_cli exactly.
         """
         try:
-            from catagent._adapters import get_adapter
+            from catclaws._adapters import get_adapter
         except ImportError:
             return None, (
-                "cat-agent is not installed. Install it to use "
+                "cat-claws is not installed. Install it to use "
                 "model_source='claude-agent': pip install cat-stack[agent]"
             )
         import asyncio
@@ -1258,7 +1258,7 @@ class UnifiedLLMClient:
                 )
             )
         except Exception as e:
-            return None, f"cat-agent call failed: {e}"
+            return None, f"cat-claws call failed: {e}"
 
     def complete(
         self,
