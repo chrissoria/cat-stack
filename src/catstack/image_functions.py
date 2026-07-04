@@ -148,7 +148,12 @@ def image_multi_class(
         raise FileNotFoundError(f"Directory {save_directory} doesn't exist")
 
     model_source = _detect_model_source(user_model, model_source)
-    _require_http_provider(model_source, "Image classification")
+    if model_source == "claude-code":
+        raise ValueError(
+            "Image classification is not supported with model_source='claude-code' "
+            "(the text-only CLI shim). Use model_source='claude-agent' (the cat-claws "
+            "subscription backend) or an API-key provider."
+        )
 
     image_files = _load_image_files(image_input)
 
@@ -663,6 +668,27 @@ Provide the final categorization in the same JSON format:"""
 
         return """{"1":"e"}""", "Max retries exceeded"
 
+    def _call_claude_agent_image(base_text, encoded, media_type):
+        """Image classification via the cat-claws multimodal adapter (Claude
+        subscription, no API key). Returns (reply, error) like _call_anthropic."""
+        try:
+            from catclaws._adapters import get_adapter
+        except ImportError:
+            return None, ("cat-claws is not installed. Run: pip install cat-stack[agent]")
+        import asyncio
+        adapter = get_adapter("claude")
+        _system = ("You are an image classification engine. Follow the user's "
+                   "instructions exactly and reply with only what they ask for.")
+        try:
+            reply, error = asyncio.run(adapter.one_shot(
+                base_text, system_prompt=_system, model=user_model,
+                thinking_budget=thinking_budget or 0,
+                images=[{"media_type": media_type, "data": encoded}],
+            ))
+            return (None, error) if error else (reply, None)
+        except Exception as e:
+            return None, f"cat-claws image call failed: {e}"
+
     def _process_single_image(img_path):
         """Process a single image and return (reply, error_msg)."""
         encoded, ext, is_valid = _encode_image(img_path)
@@ -702,6 +728,10 @@ Provide the final categorization in the same JSON format:"""
             encoded_image = f"data:image/{ext};base64,{encoded}"
             image_content = {"type": "image_url", "image_url": {"url": encoded_image, "detail": "high"}}
             return _call_mistral(prompt, step2_prompt, step3_prompt, step4_prompt, image_content)
+
+        elif model_source == "claude-agent":
+            media_type = f"image/{ext}" if ext else "image/jpeg"
+            return _call_claude_agent_image(base_prompt_text, encoded, media_type)
 
         else:
             raise ValueError("Unknown source! Choose from OpenAI, Anthropic, Perplexity, Google, xAI, Huggingface, or Mistral")

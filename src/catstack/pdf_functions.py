@@ -393,7 +393,12 @@ def pdf_multi_class(
         raise ValueError(f"mode must be 'image', 'text', or 'both', got: {mode}")
 
     model_source = _detect_model_source(user_model, model_source)
-    _require_http_provider(model_source, "PDF classification")
+    if model_source == "claude-code":
+        raise ValueError(
+            "PDF classification is not supported with model_source='claude-code' "
+            "(the text-only CLI shim). Use model_source='claude-agent' (the cat-claws "
+            "subscription backend) or an API-key provider."
+        )
 
     # Providers with native PDF support (only used in image/both modes)
     native_pdf_providers = {"anthropic", "google"}
@@ -1181,6 +1186,28 @@ Provide the final categorization in the same JSON format:"""
 
         return """{"1":"e"}""", "Max retries exceeded"
 
+    def _call_claude_agent_pdf(base_text, encoded_image):
+        """PDF-page classification via the cat-claws multimodal adapter. The page
+        is rendered to an image (PDF-as-images); Claude subscription, no API key.
+        Returns (reply, error)."""
+        try:
+            from catclaws._adapters import get_adapter
+        except ImportError:
+            return None, ("cat-claws is not installed. Run: pip install cat-stack[agent]")
+        import asyncio
+        adapter = get_adapter("claude")
+        _system = ("You are a document-page classification engine. Follow the "
+                   "user's instructions exactly and reply with only what they ask for.")
+        try:
+            reply, error = asyncio.run(adapter.one_shot(
+                base_text, system_prompt=_system, model=user_model,
+                thinking_budget=thinking_budget or 0,
+                images=[{"media_type": "image/png", "data": encoded_image}],
+            ))
+            return (None, error) if error else (reply, None)
+        except Exception as e:
+            return None, f"cat-claws PDF call failed: {e}"
+
     def _process_single_page(pdf_path, page_index, page_label):
         """Process a single PDF page and return (reply, error_msg)."""
 
@@ -1259,6 +1286,13 @@ Provide the final categorization in the same JSON format:"""
             encoded_pdf = _encode_bytes_to_base64(pdf_bytes)
             prompt_data = _build_prompt_google_pdf(encoded_pdf, base_prompt_text)
             return _call_google(prompt_data, step2_prompt, step3_prompt, step4_prompt, base_prompt_text)
+
+        elif model_source == "claude-agent":
+            image_bytes, is_valid = _extract_page_as_image_bytes(pdf_path, page_index)
+            if not is_valid:
+                return None, "Failed to render PDF page to image"
+            encoded_image = _encode_bytes_to_base64(image_bytes)
+            return _call_claude_agent_pdf(base_prompt_text, encoded_image)
 
         # Handle providers requiring image conversion
         else:

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-07-04
+
+### Added
+- **Image & PDF classification on the Claude subscription** (`model_source="claude-agent"`).
+  `image_multi_class` / `pdf_multi_class` (and `classify()` with image/PDF input) now
+  route through the cat-claws multimodal adapter, which sends images via the Agent
+  SDK's streaming-input message with base64 content blocks. PDFs are classified
+  page-by-page as rendered images. No API key required. Requires `cat-claws>=0.2.0`
+  (the `[agent]` extra pin is raised). `claude-code` (the text-only CLI shim) still
+  raises a clear "use claude-agent" error for image/PDF.
+
 ## [2.2.0] - 2026-07-04
 
 ### Added
