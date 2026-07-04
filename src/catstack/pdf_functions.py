@@ -1,6 +1,7 @@
 import warnings
 
 from .text_functions import _detect_model_source
+from ._providers import _require_http_provider
 from ._utils import _clean_label, _extract_balanced_json
 from .calls.pdf_stepback import get_pdf_stepback_insight
 
@@ -392,6 +393,7 @@ def pdf_multi_class(
         raise ValueError(f"mode must be 'image', 'text', or 'both', got: {mode}")
 
     model_source = _detect_model_source(user_model, model_source)
+    _require_http_provider(model_source, "PDF classification")
 
     # Providers with native PDF support (only used in image/both modes)
     native_pdf_providers = {"anthropic", "google"}

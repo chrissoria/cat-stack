@@ -729,6 +729,24 @@ PROVIDER_CONFIG = {
 }
 
 
+# Providers that route through complete() with no HTTP endpoint of their own
+# (Claude subscription / CLI). Features that build a direct HTTP request
+# (image, PDF) can't use them — guard with a clear error, not a deep crash.
+_SUBSCRIPTION_PROVIDERS = ("claude-code", "claude-agent")
+
+
+def _require_http_provider(model_source, feature):
+    """Raise a clear error when an HTTP-only feature is used with a
+    subscription/CLI provider (claude-code / claude-agent)."""
+    if model_source in _SUBSCRIPTION_PROVIDERS:
+        raise ValueError(
+            f"{feature} is not supported with model_source='{model_source}'. "
+            "The Claude subscription/CLI backend supports text classification, "
+            "extraction, and summarization, but not " + feature.lower() + ". "
+            "Use an API-key provider (e.g. model_source='anthropic') instead."
+        )
+
+
 # =============================================================================
 # Unified API Client
 # =============================================================================

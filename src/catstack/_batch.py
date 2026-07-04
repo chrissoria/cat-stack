@@ -65,7 +65,7 @@ BATCH_ENDPOINTS = {
     },
 }
 
-UNSUPPORTED_BATCH_PROVIDERS = {"huggingface", "huggingface-together", "perplexity", "ollama"}
+UNSUPPORTED_BATCH_PROVIDERS = {"huggingface", "huggingface-together", "perplexity", "ollama", "claude-code", "claude-agent"}
 
 # Terminal states per provider
 _TERMINAL_STATES = {

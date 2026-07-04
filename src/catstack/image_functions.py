@@ -1,6 +1,7 @@
 import warnings
 
 from .text_functions import _detect_model_source
+from ._providers import _require_http_provider
 from ._utils import _clean_label, _extract_balanced_json
 from .calls.image_stepback import get_image_stepback_insight
 
@@ -147,6 +148,7 @@ def image_multi_class(
         raise FileNotFoundError(f"Directory {save_directory} doesn't exist")
 
     model_source = _detect_model_source(user_model, model_source)
+    _require_http_provider(model_source, "Image classification")
 
     image_files = _load_image_files(image_input)
 

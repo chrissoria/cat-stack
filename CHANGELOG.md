@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-07-03
+
+### Fixed
+- **Batch mode with `claude-code` / `claude-agent`** now falls back to
+  synchronous classification instead of attempting a batch API those backends
+  don't have (added both to `UNSUPPORTED_BATCH_PROVIDERS`).
+
+### Added
+- Clear errors when **image or PDF classification** is requested with
+  `model_source="claude-code"` / `"claude-agent"`: a `_require_http_provider`
+  guard raises a "use an API-key provider" message instead of crashing deep in
+  a `requests.post` (the subscription/CLI backend has no HTTP endpoint for
+  them). Text classify/extract/summarize are unaffected; step-back and
+  chain-of-verification already degrade gracefully.
+
 ## [2.1.0] - 2026-07-03
 
 ### Added
