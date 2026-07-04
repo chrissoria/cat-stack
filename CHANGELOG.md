@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`model_source="claude-agent"` provider** — classify through a Claude
+  subscription via the cat-agent SDK backend (no API key), alongside the
+  existing `claude-code` subprocess shim. Dispatch mirrors the `claude-code`
+  branch exactly: a `PROVIDER_CONFIG` entry, `_detect_model_source`
+  recognition, a `_call_claude_agent` method (async adapter driven via
+  `asyncio.run` per call; message flattening identical to `_call_claude_cli`),
+  an ensemble availability check + preflight-probe skip, and an `[agent]`
+  extra (`pip install cat-stack[agent]`). Entirely additive and gated on the
+  new provider value: the full pre-existing test suite passes unchanged
+  (507→507) plus 5 new dispatch tests, and a live `complete()` classified
+  correctly through the subscription. Requires the cat-agent package
+  (published separately); without it the provider returns a clear
+  `pip install cat-stack[agent]` hint rather than a traceback.
+
 ### Changed
 - Claude Code CLI provider: install-help URL in the "CLI not found" error
   updated to the current docs home (`code.claude.com/docs`; the old

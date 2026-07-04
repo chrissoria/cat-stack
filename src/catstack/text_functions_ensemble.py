@@ -660,6 +660,18 @@ def prepare_model_configs(
                     "Install: https://docs.anthropic.com/en/docs/claude-code\n"
                     + "="*60
                 )
+        elif detected_provider == "claude-agent":
+            try:
+                import catagent  # noqa: F401
+            except ImportError:
+                raise ConnectionError(
+                    "\n" + "="*60 + "\n"
+                    "  CAT-AGENT NOT INSTALLED\n"
+                    "="*60 + "\n\n"
+                    "The cat-agent package is required to use claude-agent as a provider.\n"
+                    "Install: pip install cat-stack[agent]\n"
+                    + "="*60
+                )
         else:
             # Validate API key exists for cloud providers
             if not api_key:
@@ -670,7 +682,7 @@ def prepare_model_configs(
         # Preflight probe: test the model with a minimal JSON call to catch
         # issues (model not found, structured output not supported) before
         # processing thousands of rows.
-        if detected_provider not in ("ollama", "claude-code"):
+        if detected_provider not in ("ollama", "claude-code", "claude-agent"):
             try:
                 probe_client = UnifiedLLMClient(
                     provider=detected_provider,

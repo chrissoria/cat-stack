@@ -410,7 +410,7 @@ def explore_corpus(
     provider = detect_provider(model, provider)
 
     # Validate api_key
-    if provider not in ("ollama", "claude-code") and not api_key:
+    if provider not in ("ollama", "claude-code", "claude-agent") and not api_key:
         raise ValueError(f"api_key is required for provider '{provider}'")
 
     print(f"Exploring categories for question: '{survey_question}'")
@@ -596,7 +596,7 @@ def explore_common_categories(
     provider = detect_provider(model, provider)
 
     # Validate api_key
-    if provider not in ("ollama", "claude-code") and not api_key:
+    if provider not in ("ollama", "claude-code", "claude-agent") and not api_key:
         raise ValueError(f"api_key is required for provider '{provider}'")
 
     # Ollama-specific checks
@@ -1062,7 +1062,7 @@ def multi_class(
     provider = detect_provider(model, provider)
 
     # Validate api_key requirement
-    if provider not in ("ollama", "claude-code") and not api_key:
+    if provider not in ("ollama", "claude-code", "claude-agent") and not api_key:
         raise ValueError(f"api_key is required for provider '{provider}'")
 
     # Handle categories="auto" - auto-detect categories from the data

@@ -721,6 +721,11 @@ PROVIDER_CONFIG = {
         "auth_header": None,
         "auth_prefix": "",
     },
+    "claude-agent": {
+        "endpoint": None,  # Uses the cat-agent SDK adapter, not HTTP
+        "auth_header": None,
+        "auth_prefix": "",
+    },
 }
 
 
@@ -1206,6 +1211,55 @@ class UnifiedLLMClient:
             # contract that callers depend on.
             return None, f"Claude CLI subprocess failed: {e} (prompt may be too large for argv)"
 
+    def _call_claude_agent(
+        self,
+        messages: list,
+        thinking_budget: int = None,
+    ) -> tuple[str, str | None]:
+        """Route one completion through the cat-agent SDK adapter.
+
+        Like `_call_claude_cli`, this runs on the user's Claude subscription
+        (no API key) and returns the same (text, error) contract. cat-agent is
+        an optional dependency (the `[agent]` extra); a missing install
+        degrades to a clear install hint rather than an ImportError traceback.
+
+        The adapter is async. complete() is sync and may run inside ensemble
+        worker threads, so we drive one sealed call per invocation with
+        asyncio.run (a fresh loop per call) - never a shared/module-global
+        loop. Message flattening mirrors _call_claude_cli exactly.
+        """
+        try:
+            from catagent._adapters import get_adapter
+        except ImportError:
+            return None, (
+                "cat-agent is not installed. Install it to use "
+                "model_source='claude-agent': pip install cat-stack[agent]"
+            )
+        import asyncio
+
+        system_parts = []
+        user_parts = []
+        for msg in messages:
+            if msg["role"] == "system":
+                system_parts.append(msg["content"])
+            elif msg["role"] in ("user", "assistant"):
+                user_parts.append(msg["content"])
+        system_prompt = "\n\n".join(system_parts) if system_parts else None
+        user_prompt = "\n\n".join(user_parts)
+
+        adapter = get_adapter("claude")
+        try:
+            return asyncio.run(
+                adapter.one_shot(
+                    user_prompt,
+                    system_prompt=system_prompt,
+                    model=self.model,
+                    thinking_budget=thinking_budget or 0,
+                )
+            )
+        except Exception as e:
+            return None, f"cat-agent call failed: {e}"
+
     def complete(
         self,
         messages: list,
@@ -1248,6 +1302,9 @@ class UnifiedLLMClient:
         """
         if self.provider == "claude-code":
             return self._call_claude_cli(messages, max_retries=max_retries, initial_delay=initial_delay)
+
+        if self.provider == "claude-agent":
+            return self._call_claude_agent(messages, thinking_budget=thinking_budget)
 
         headers = self._get_headers()
         payload = self._build_payload(messages, json_schema, creativity, thinking_budget=thinking_budget, force_json=force_json)
@@ -1741,6 +1798,8 @@ def _detect_model_source(user_model, model_source):
     still use this name. Will be inlined in a future cleanup."""
     if model_source and model_source.lower() == "claude-code":
         return "claude-code"
+    if model_source and model_source.lower() == "claude-agent":
+        return "claude-agent"
     return detect_provider(user_model, provider=model_source)
 
 
