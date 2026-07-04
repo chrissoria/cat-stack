@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-07-04
+
+### Added
+- **Step-back prompting now works with `claude-code` / `claude-agent`.** Their
+  step-back insight is generated via the central `UnifiedLLMClient.complete()`
+  (a new `get_stepback_insight_via_complete` leaf) instead of a provider-specific
+  `requests.post`, so `step_back_prompt=True` runs on the subscription instead of
+  being silently skipped. (Chain-of-verification already routed through
+  `complete()` and worked; no change needed there.)
+
 ## [2.1.1] - 2026-07-03
 
 ### Fixed
@@ -1631,6 +1641,16 @@ and R users see the same API they did in 1.1.3.
 - **`extract()` default `input_type`** changed from `"text"` to `"auto"`. When set to `"auto"`, `extract()` calls `_detect_input_type()` to auto-detect the input format. Explicit `input_type="text"` still works as before.
 
 ---
+
+---
+
+## Legacy history — pre-split CatLLM (version numbers overlap the cat-stack lineage above)
+
+*The versions below are from the original CatLLM monorepo, which reached 2.10.0
+before the classification engine was extracted into `cat-stack` and versioning
+restarted (the 0.x / 1.x / 2.0.0+ entries above). Their numbers (2.2.0, 2.3.0 …
+2.10.0) are reused by the current lineage and are kept for historical reference
+only.*
 
 ## [2.10.0] - 2026-03-15
 

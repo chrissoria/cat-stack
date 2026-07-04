@@ -361,7 +361,8 @@ def _get_stepback_insight(model_source, stepback, api_key, user_model, creativit
         get_stepback_insight_openai,
         get_stepback_insight_anthropic,
         get_stepback_insight_google,
-        get_stepback_insight_mistral
+        get_stepback_insight_mistral,
+        get_stepback_insight_via_complete
     )
 
     stepback_functions = {
@@ -373,6 +374,8 @@ def _get_stepback_insight(model_source, stepback, api_key, user_model, creativit
         "anthropic": get_stepback_insight_anthropic,
         "google": get_stepback_insight_google,
         "mistral": get_stepback_insight_mistral,
+        "claude-code": get_stepback_insight_via_complete,
+        "claude-agent": get_stepback_insight_via_complete,
     }
 
     func = stepback_functions.get(model_source)

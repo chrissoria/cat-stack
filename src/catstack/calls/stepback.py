@@ -187,3 +187,34 @@ def get_stepback_insight_mistral(
 
     except Exception as e:
         return None, False
+
+
+
+def get_stepback_insight_via_complete(
+    stepback,
+    api_key,
+    user_model,
+    model_source,
+    creativity=None,
+):
+    """Stepback insight via the central UnifiedLLMClient.complete().
+
+    For providers with no direct HTTP endpoint (claude-agent / claude-code),
+    which route through complete() rather than a provider-specific requests.post.
+    Returns (insight_text, True) on success, (None, False) otherwise.
+    """
+    from cat_stack._providers import UnifiedLLMClient
+    try:
+        client = UnifiedLLMClient(
+            provider=model_source, api_key=api_key or "", model=user_model
+        )
+        insight, error = client.complete(
+            messages=[{"role": "user", "content": stepback}],
+            creativity=creativity,
+            force_json=False,  # stepback insight is free text, not JSON
+        )
+        if error or not insight:
+            return None, False
+        return insight, True
+    except Exception:
+        return None, False
