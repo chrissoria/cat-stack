@@ -48,6 +48,7 @@ def run_chunked_classification(
     thinking_budget,
     max_retries,
     multi_label,
+    system_prompt="",
     categories_per_call,
     add_unified_other=False,
     formatter_fallback_fn,
@@ -149,6 +150,7 @@ Categorize text responses {cove_categorize}:
             thinking_budget=thinking_budget,
             max_retries=max_retries,
             multi_label=multi_label,
+            system_prompt=system_prompt,
             formatter_fallback_fn=formatter_fallback_fn,
             is_pdf_mode=is_pdf_mode,
             is_image_mode=is_image_mode,
@@ -228,6 +230,7 @@ def _run_single_chunk_call(
     thinking_budget,
     max_retries,
     multi_label,
+    system_prompt="",
     formatter_fallback_fn,
     is_pdf_mode,
     is_image_mode,
@@ -366,7 +369,7 @@ def _run_single_chunk_call(
         response_text = item
 
         if cfg["use_two_step"]:  # Ollama
-            json_result, error = ollama_two_step_classify(
+            json_result, _step1_raw, error = ollama_two_step_classify(
                 client=client,
                 response_text=response_text,
                 categories=chunk_cats,
@@ -390,6 +393,7 @@ def _run_single_chunk_call(
                 stepback_insights=stepback_insights,
                 model_name=cfg["model"],
                 multi_label=multi_label,
+                system_prompt=system_prompt,
             )
             reply, error = client.complete(
                 messages=messages,

@@ -483,6 +483,7 @@ def classify(
     if check_verbosity and categories and categories != "auto":
         # Extract API key and provider from first model entry
         first_entry = models[0]
+        check_model = first_entry[0] if len(first_entry) >= 1 else None
         check_key = first_entry[2] if len(first_entry) >= 3 else None
         check_source = first_entry[1] if len(first_entry) >= 2 else "auto"
 
@@ -491,6 +492,7 @@ def classify(
                 verbosity = check_category_verbosity(
                     categories,
                     api_key=check_key,
+                    user_model=check_model,
                     model_source=check_source,
                 )
                 lacking = [r for r in verbosity if not r["is_verbose"]]
@@ -530,7 +532,9 @@ def classify(
     if pilot_test and categories and categories != "auto":
         from ._pilot_test import run_pilot_test
 
-        pilot_sample_size = pilot_test if isinstance(pilot_test, int) else 10
+        # bool is an int subclass — pilot_test=True must mean "10 items",
+        # not a sample of size 1
+        pilot_sample_size = pilot_test if isinstance(pilot_test, int) and not isinstance(pilot_test, bool) else 10
 
         # Build kwargs that mirror what classify() passes to classify_ensemble
         _pilot_ensemble_kwargs = dict(
@@ -564,6 +568,9 @@ def classify(
             consensus_threshold=consensus_threshold,
             multi_label=multi_label,
             input_mode=input_mode,
+            system_prompt=system_prompt,
+            two_step_classify=two_step_classify,
+            categories_per_call=categories_per_call,
         )
 
         pilot_result = run_pilot_test(
@@ -584,7 +591,9 @@ def classify(
     if prompt_tune and categories and categories != "auto":
         from .prompt_tune import prompt_tune as _prompt_tune
 
-        tune_sample_size = prompt_tune if isinstance(prompt_tune, int) else 10
+        # bool is an int subclass — prompt_tune=True must mean "10 items",
+        # not a sample of size 1
+        tune_sample_size = prompt_tune if isinstance(prompt_tune, int) and not isinstance(prompt_tune, bool) else 10
 
         tune_result = _prompt_tune(
             input_data=input_data,
@@ -916,8 +925,19 @@ def classify(
         from ._batch import UNSUPPORTED_BATCH_PROVIDERS, run_batch_classify
         from .text_functions_ensemble import prepare_json_schemas, prepare_model_configs
 
+        # Guard: batch mode can't auto-discover categories (that happens in
+        # classify_ensemble, which batch mode bypasses) — without this,
+        # enumerate("auto") would silently classify into the four one-letter
+        # categories "a", "u", "t", "o".
+        if categories == "auto":
+            raise ValueError(
+                "categories='auto' is not supported with batch_mode=True. "
+                "Discover categories first (e.g. with cat_stack.explore()) and pass "
+                "the resulting list, or set batch_mode=False."
+            )
+
         # Guard: text input only (auto-detect)
-        from .text_functions_ensemble import _detect_input_type
+        from .text_functions_ensemble import _convert_docx_to_text, _detect_input_type
         detected_type = _detect_input_type(input_data)
         if detected_type in ("pdf", "image"):
             if input_mode == "text":
@@ -929,6 +949,12 @@ def classify(
                 f"batch_mode=True only supports text input, but detected input type is '{detected_type}'. "
                 "Set batch_mode=False for PDF/image classification."
             )
+        if detected_type == "docx":
+            # Mirror the sync path (classify_ensemble): convert to text first.
+            print("Converting DOCX files to text...")
+            input_data = _convert_docx_to_text(input_data)
+            if isinstance(input_data, str):
+                input_data = [input_data]
 
         # Warn if embedding_tiebreaker was provided (not supported in batch mode yet)
         if _embedding_tiebreaker_state is not None:
@@ -974,7 +1000,7 @@ def classify(
                 "stepback_insights": {},
                 "system_prompt": system_prompt,
                 "json_schema": json_schemas[cfg["model"]],
-                "creativity": creativity,
+                "creativity": cfg["creativity"] if cfg["creativity"] is not None else creativity,
                 "thinking_budget": thinking_budget,
                 "multi_label": multi_label,
             }

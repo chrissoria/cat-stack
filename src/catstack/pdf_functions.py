@@ -399,6 +399,12 @@ def pdf_multi_class(
             "(the text-only CLI shim). Use model_source='claude-agent' (the cat-claws "
             "subscription backend) or an API-key provider."
         )
+    if model_source == "codex-agent":
+        raise ValueError(
+            "PDF classification is not yet supported with "
+            "model_source='codex-agent'. Use model_source='claude-agent' (the "
+            "multimodal subscription backend) or an API-key provider."
+        )
 
     # Providers with native PDF support (only used in image/both modes)
     native_pdf_providers = {"anthropic", "google"}

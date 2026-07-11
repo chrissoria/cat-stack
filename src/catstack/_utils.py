@@ -249,6 +249,14 @@ def ollama_two_step_classify(
     Returns:
         tuple: (json_string, error_message or None)
     """
+    # Lazy import — extract_json lives in text_functions (which imports this
+    # module at its top, so a module-level import here would be circular).
+    # Without it this function raised NameError on every successful Step 2.
+    # NOTE: text_functions.ollama_two_step_classify is the maintained copy
+    # (3-tuple return, exposes the step-1 raw reply); this 2-tuple variant is
+    # kept only so the _utils export keeps working.
+    from .text_functions import extract_json
+
     num_categories = len(categories)
     survey_context = f"Context: {survey_question}." if survey_question else ""
 
@@ -376,6 +384,7 @@ def _get_stepback_insight(model_source, stepback, api_key, user_model, creativit
         "mistral": get_stepback_insight_mistral,
         "claude-code": get_stepback_insight_via_complete,
         "claude-agent": get_stepback_insight_via_complete,
+        "codex-agent": get_stepback_insight_via_complete,
     }
 
     func = stepback_functions.get(model_source)

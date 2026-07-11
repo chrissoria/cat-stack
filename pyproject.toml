@@ -28,6 +28,10 @@ dependencies = [
   "pandas",
   "tqdm",
   "requests",
+  # collapse_themes.py imports jellyfish at module top (and catstack/__init__
+  # imports collapse_themes eagerly), so every fresh install needs it —
+  # undeclared, it broke `import catstack` in clean environments.
+  "jellyfish",
 ]
 
 [project.optional-dependencies]
@@ -35,7 +39,11 @@ pdf = ["PyMuPDF>=1.23.0"]
 docx = ["python-docx>=1.0.0"]
 formatter = ["torch>=2.0.0", "transformers>=4.40.0", "accelerate>=0.27.0"]
 embeddings = ["sentence-transformers>=2.2.0"]
-agent = ["cat-claws>=0.2.0"]
+# `agent` keeps its historical meaning (the Claude backend) so every shipped
+# install hint stays true; `codex-agent` matches the provider string so the
+# error-message hint is copy-pasteable.
+agent = ["cat-claws[claude]>=0.3.0"]
+codex-agent = ["cat-claws[codex]>=0.3.0"]
 
 [project.urls]
 Documentation = "https://github.com/chrissoria/cat-stack#readme"

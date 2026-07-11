@@ -65,7 +65,7 @@ BATCH_ENDPOINTS = {
     },
 }
 
-UNSUPPORTED_BATCH_PROVIDERS = {"huggingface", "huggingface-together", "perplexity", "ollama", "claude-code", "claude-agent"}
+UNSUPPORTED_BATCH_PROVIDERS = {"huggingface", "huggingface-together", "perplexity", "ollama", "claude-code", "claude-agent", "codex-agent"}
 
 # Terminal states per provider
 _TERMINAL_STATES = {
@@ -928,11 +928,17 @@ def _run_one_sync_model(
             system_prompt=prompt_params.get("system_prompt", ""),
         )
         try:
+            # Pass thinking_budget through unchanged (including explicit 0 =
+            # "reasoning off") — apply_model_params translates 0 into each
+            # provider's off form, exactly like the non-batch sync path, and
+            # complete() has the 400 strip-and-retry net for providers that
+            # reject it. Nullifying 0 here left Qwen3/Ollama-family rows in
+            # the batch sync fallback reasoning at provider default.
             raw, err = client.complete(
                 messages=messages,
                 json_schema=json_schema,
                 creativity=creativity,
-                thinking_budget=thinking_budget if thinking_budget and thinking_budget > 0 else None,
+                thinking_budget=thinking_budget,
             )
             if err:
                 item_results[idx] = (None, err)

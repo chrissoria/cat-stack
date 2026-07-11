@@ -89,15 +89,20 @@ def _find_confident_and_tied_rows(all_results, category_key, threshold):
         positive_count = sum(votes)
         positive_rate = positive_count / num_models
 
-        # Check for true tie: positive_rate == threshold exactly
-        if abs(positive_rate - threshold) < 1e-9:
-            tied.append(row_idx)
-        elif positive_rate == 1.0:
+        # Unanimous rows are confident by definition and must be bucketed
+        # BEFORE the tie test: with consensus_threshold="unanimous" (the
+        # classify() default, threshold=1.0) every all-positive row sits
+        # exactly at the threshold, and testing ties first classified them
+        # all as "tied" — leaving zero confident rows to build centroids from.
+        if positive_rate == 1.0:
             # All models agree positive
             confident_pos.append(row_idx)
         elif positive_rate == 0.0:
             # All models agree negative
             confident_neg.append(row_idx)
+        # Check for true tie: positive_rate == threshold exactly
+        elif abs(positive_rate - threshold) < 1e-9:
+            tied.append(row_idx)
 
     return confident_pos, confident_neg, tied
 

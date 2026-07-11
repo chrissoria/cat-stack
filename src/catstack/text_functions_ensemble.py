@@ -106,16 +106,20 @@ def _resolve_consensus_threshold(threshold: Union[str, float, int]) -> float:
         >>> _resolve_consensus_threshold("majority")
         0.5
         >>> _resolve_consensus_threshold("two-thirds")
-        0.67
+        0.6666666666666666
         >>> _resolve_consensus_threshold(0.75)
         0.75
     """
     if isinstance(threshold, str):
         mapping = {
             "majority": 0.5,
-            "two-thirds": 0.67,
-            "two_thirds": 0.67,
-            "twothirds": 0.67,
+            # Exact fraction, NOT 0.67 — the consensus comparison is
+            # `positive_rate >= threshold`, and 2 of 3 models is 0.6667,
+            # which fails against 0.67 (making "two-thirds" behave like
+            # "unanimous" for any multiple-of-3 ensemble).
+            "two-thirds": 2 / 3,
+            "two_thirds": 2 / 3,
+            "twothirds": 2 / 3,
             "unanimous": 1.0,
         }
         resolved = mapping.get(threshold.lower().strip())
@@ -190,7 +194,15 @@ def _extract_docx_text(file_path: str) -> str:
             "The 'python-docx' package is required for DOCX support. "
             "Install it with: pip install python-docx"
         )
-    doc = Document(file_path)
+    try:
+        doc = Document(file_path)
+    except Exception as e:
+        # python-docx reads only OOXML .docx; legacy binary .doc (OLE2) files
+        # land here with an opaque PackageNotFoundError.
+        raise ValueError(
+            f"Could not read '{file_path}' as a DOCX file. Legacy binary .doc "
+            f"files are not supported — save/convert the file to .docx first. ({e})"
+        ) from e
     return "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
 
 
@@ -672,6 +684,18 @@ def prepare_model_configs(
                     "Install: pip install cat-stack[agent]\n"
                     + "="*60
                 )
+        elif detected_provider == "codex-agent":
+            try:
+                import catclaws  # noqa: F401
+            except ImportError:
+                raise ConnectionError(
+                    "\n" + "="*60 + "\n"
+                    "  CAT-AGENT NOT INSTALLED\n"
+                    "="*60 + "\n\n"
+                    "The cat-claws package is required to use codex-agent as a provider.\n"
+                    'Install: pip install "cat-stack[codex-agent]"\n'
+                    + "="*60
+                )
         else:
             # Validate API key exists for cloud providers
             if not api_key:
@@ -682,7 +706,7 @@ def prepare_model_configs(
         # Preflight probe: test the model with a minimal JSON call to catch
         # issues (model not found, structured output not supported) before
         # processing thousands of rows.
-        if detected_provider not in ("ollama", "claude-code", "claude-agent"):
+        if detected_provider not in ("ollama", "claude-code", "claude-agent", "codex-agent"):
             try:
                 probe_client = UnifiedLLMClient(
                     provider=detected_provider,
@@ -2293,30 +2317,43 @@ def _call_google_multimodal(client, messages, json_schema, creativity, thinking_
     """
     import requests
 
-    user_msg = messages[-1]
-    content = user_msg.get("content", [])
-
-    parts = []
-    for part in content:
-        if part.get("type") == "text":
-            parts.append({"text": part["text"]})
-        elif part.get("type") == "inline_data":
-            parts.append({
-                "inline_data": {
-                    "mime_type": part["mime_type"],
-                    "data": part["data"]
-                }
-            })
-        elif part.get("type") == "image_url":
-            url = part["image_url"]["url"]
-            if url.startswith("data:image/png;base64,"):
-                data = url.replace("data:image/png;base64,", "")
+    def _parts_from_content(content):
+        if isinstance(content, str):
+            return [{"text": content}]
+        parts = []
+        for part in content:
+            if part.get("type") == "text":
+                parts.append({"text": part["text"]})
+            elif part.get("type") == "inline_data":
                 parts.append({
                     "inline_data": {
-                        "mime_type": "image/png",
-                        "data": data
+                        "mime_type": part["mime_type"],
+                        "data": part["data"]
                     }
                 })
+            elif part.get("type") == "image_url":
+                url = part["image_url"]["url"]
+                if url.startswith("data:image/png;base64,"):
+                    data = url.replace("data:image/png;base64,", "")
+                    parts.append({
+                        "inline_data": {
+                            "mime_type": "image/png",
+                            "data": data
+                        }
+                    })
+        return parts
+
+    # Convert EVERY message, not just the last one — the prompt builders
+    # prepend step-back insight turns (user question + assistant answer)
+    # that must reach Gemini as multi-turn contents. Anthropic-style
+    # "assistant" maps to Gemini's "model" role.
+    contents = [
+        {
+            "role": "model" if msg.get("role") == "assistant" else "user",
+            "parts": _parts_from_content(msg.get("content", [])),
+        }
+        for msg in messages
+    ]
 
     model_name = client.model
 
@@ -2327,7 +2364,7 @@ def _call_google_multimodal(client, messages, json_schema, creativity, thinking_
     }
 
     payload = {
-        "contents": [{"parts": parts}],
+        "contents": contents,
         "generationConfig": {
             "responseMimeType": "application/json",
         }
@@ -2987,6 +3024,7 @@ Categorize text responses {cove_categorize}:
                     thinking_budget=thinking_budget,
                     max_retries=max_retries,
                     multi_label=multi_label,
+                    system_prompt=system_prompt,
                     categories_per_call=categories_per_call,
                     add_unified_other=_add_unified_other,
                     formatter_fallback_fn=_try_formatter_fallback,
@@ -3695,9 +3733,12 @@ def build_output_dataframes(
 
         # Per-model results
         failed_set = set(aggregated.get("failed_models", []))
+        is_skipped = result.get("skipped", False)
         for model_name in model_names:
-            if model_name in failed_set:
-                # Model failed validation entirely — mark as NA
+            if is_skipped or model_name in failed_set:
+                # Skipped (NaN input) or model failed — mark as NA
+                # (matching _save_partial_results; without the skipped check,
+                # rows never sent to any model came back as all-zero votes)
                 for i in range(1, num_categories + 1):
                     combined_data[f"category_{i}_{model_name}"].append(None)
             else:
@@ -3834,6 +3875,10 @@ def _save_partial_summarize_results(all_results, model_configs, model_names, is_
                 "pdf_path": pdf_path,
                 "page_index": page_index,
             }
+        elif isinstance(item, tuple) and len(item) == 2:
+            # Image mode: item is (image_path, image_label)
+            image_path, image_label = item
+            row = {"input_data": image_label, "image_path": image_path}
         else:
             row = {"input_data": item}
 
@@ -4131,7 +4176,9 @@ def summarize_ensemble(
                     context_prompt=context_prompt,
                     step_back_prompt=step_back_prompt,
                     stepback_insights=stepback_insights,
-                    model_name=model_name,
+                    # Raw model name — gather_stepback_insights keys the dict
+                    # by cfg["model"]; the sanitized name never matches.
+                    model_name=cfg["model"],
                 )
 
                 # Create client and make API call
@@ -4197,7 +4244,9 @@ def summarize_ensemble(
                     context_prompt=context_prompt,
                     step_back_prompt=step_back_prompt,
                     stepback_insights=stepback_insights,
-                    model_name=model_name,
+                    # Raw model name — gather_stepback_insights keys the dict
+                    # by cfg["model"]; the sanitized name never matches.
+                    model_name=cfg["model"],
                 )
 
                 client = UnifiedLLMClient(
@@ -4254,7 +4303,9 @@ def summarize_ensemble(
                     context_prompt=context_prompt,
                     step_back_prompt=step_back_prompt,
                     stepback_insights=stepback_insights,
-                    model_name=model_name,
+                    # Raw model name — gather_stepback_insights keys the dict
+                    # by cfg["model"]; the sanitized name never matches.
+                    model_name=cfg["model"],
                 )
 
                 # Create client and make API call
@@ -4419,6 +4470,11 @@ def summarize_ensemble(
             "model_results": item_results,
             "errors": item_errors,
             "page_text": extracted_page_text,
+            # The item actually summarized (post-OCR text when input_mode="text"
+            # replaced the tuple). Batch retries must reuse THIS, not the raw
+            # items_to_process entry, or a retried row is re-summarized visually
+            # in a mode the user disabled.
+            "_retry_item": item,
         }
         all_results.append(result_entry)
 
@@ -4450,7 +4506,7 @@ def summarize_ensemble(
             if not cfg:
                 continue
 
-            item = items_to_process[idx]
+            item = all_results[idx].get("_retry_item", items_to_process[idx])
             model_name_result, json_result, error = summarize_single_item(item, idx, cfg)
 
             if error and error != "skipped":
@@ -4488,6 +4544,16 @@ def summarize_ensemble(
             # Visual-mode PDFs have no extracted text — fall back to the page label so
             # synthesis still has *something* to anchor on (prior behavior).
             original_text_for_synthesis = entry.get("page_text") or page_label
+        elif is_image_mode and isinstance(item, tuple) and len(item) == 2:
+            # IMAGE MODE: item is (image_path, image_label) — surface the label
+            # and path instead of the tuple repr.
+            image_path, image_label = item
+            row = {
+                "input_index": entry["idx"],
+                "input_data": image_label,
+                "image_path": image_path,
+            }
+            original_text_for_synthesis = image_label
         else:
             # Truncate input_data for readability; add input_index for joining.
             # Truncation is intentional HERE (summarize): inputs can be whole
@@ -4552,7 +4618,11 @@ def summarize_ensemble(
             # For PDF mode, check if it's a valid tuple (never skip PDFs)
             if is_pdf_mode:
                 row["processing_status"] = "error"
-            elif item is None or (isinstance(item, str) and not item.strip()):
+            elif item is None or (isinstance(item, str) and not item.strip()) or (
+                not isinstance(item, (tuple, list, str)) and pd.isna(item)
+            ):
+                # Same skip predicate as summarize_single_item — without the
+                # pd.isna clause, float-NaN inputs were labeled "error".
                 row["processing_status"] = "skipped"
             else:
                 row["processing_status"] = "error"

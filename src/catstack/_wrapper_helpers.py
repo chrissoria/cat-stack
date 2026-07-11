@@ -143,7 +143,10 @@ def parse_kwargs_string(s: Optional[str]) -> Dict[str, Any]:
             buf.append(ch)
             if ch == quote_char:
                 quote_char = None
-        elif ch in ('"', "'"):
+        elif ch in ('"', "'") and (not buf or buf[-1] in " =,([{"):
+            # Open a quote only at a value boundary — an apostrophe inside
+            # unquoted prose ("don't", "it's") must not start a "string"
+            # that swallows every following top-level comma and key=val pair.
             quote_char = ch
             buf.append(ch)
         elif ch in "([{":

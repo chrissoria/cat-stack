@@ -251,7 +251,8 @@ def prompt_tune(
     )
 
     # Pick the model/key to use for the meta-optimization LLM calls
-    meta_model, meta_source, meta_key = models[0]
+    # (entries may be 4-tuples with a per-model options dict — ignore it here)
+    meta_model, meta_source, meta_key = models[0][:3]
     if meta_source == "auto":
         meta_source = detect_provider(meta_model)
 
@@ -343,6 +344,13 @@ def prompt_tune(
 
         print(f"\n  Categories with errors ({len(cats_with_errors)}): {', '.join(cats_with_errors)}")
 
+        # The improvement reference must track the CURRENT prompt state across
+        # categories, not the original baseline: once category A's instruction
+        # is kept (score rises), a category-B attempt that lands below the kept
+        # state but above the stale baseline would otherwise be labeled
+        # "improved" and kept — the revert branch below could never fire.
+        prev_score = baseline_target
+
         for cat_idx, target_cat in enumerate(cats_with_errors, 1):
             cat_errors = per_cat[target_cat]["fp"] + per_cat[target_cat]["fn"]
             print(f"\n{'─' * 60}")
@@ -350,7 +358,6 @@ def prompt_tune(
             print(f"  Up to {max_iterations} iteration(s)")
 
             attempt_history = []
-            prev_score = baseline_target
             prev_instruction = cat_instructions.get(target_cat, "")
 
             for attempt in range(1, max_iterations + 1):

@@ -361,15 +361,23 @@ def summarize(
     # =========================================================================
     if batch_mode:
         from ._batch import UNSUPPORTED_BATCH_PROVIDERS, run_batch_summarize
-        from .text_functions_ensemble import _detect_input_type, prepare_model_configs
+        from .text_functions_ensemble import (
+            _convert_docx_to_text,
+            _detect_input_type,
+            prepare_model_configs,
+        )
 
         # Guard: text input only
         detected_type = _detect_input_type(input_data)
-        if detected_type == "pdf":
+        if detected_type in ("pdf", "image"):
             raise ValueError(
-                "batch_mode=True only supports text input, but detected input type is 'pdf'. "
-                "Set batch_mode=False for PDF summarization."
+                f"batch_mode=True only supports text input, but detected input type is '{detected_type}'. "
+                "Set batch_mode=False for PDF/image summarization."
             )
+        if detected_type == "docx":
+            # Mirror the sync path (summarize_ensemble): convert to text first.
+            print("Converting DOCX files to text...")
+            input_data = _convert_docx_to_text(input_data)
 
         # Warn if progress_callback was provided (incompatible with batch)
         if progress_callback is not None:
@@ -385,7 +393,14 @@ def summarize(
             batch_models = models
 
         model_configs = prepare_model_configs(batch_models)
-        items = list(input_data) if not isinstance(input_data, list) else input_data
+        # Normalize like summarize_ensemble: a bare string is ONE document,
+        # not an iterable of characters.
+        if isinstance(input_data, str):
+            items = [input_data]
+        elif isinstance(input_data, list):
+            items = input_data
+        else:
+            items = list(input_data)
 
         prompt_params = {
             "input_description": description,

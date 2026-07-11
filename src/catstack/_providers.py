@@ -726,22 +726,35 @@ PROVIDER_CONFIG = {
         "auth_header": None,
         "auth_prefix": "",
     },
+    "codex-agent": {
+        "endpoint": None,  # Uses the cat-claws SDK adapter, not HTTP
+        "auth_header": None,
+        "auth_prefix": "",
+    },
 }
 
 
 # Providers that route through complete() with no HTTP endpoint of their own
-# (Claude subscription / CLI). Features that build a direct HTTP request
+# (subscription logins / CLI). Features that build a direct HTTP request
 # (image, PDF) can't use them — guard with a clear error, not a deep crash.
-_SUBSCRIPTION_PROVIDERS = ("claude-code", "claude-agent")
+_SUBSCRIPTION_PROVIDERS = ("claude-code", "claude-agent", "codex-agent")
+
+# Agent-SDK backends routed through cat-claws: provider -> (adapter name,
+# install hint). Both run on subscription logins (no API key); the hint names
+# the cat-stack extra that pulls the matching cat-claws SDK extra.
+_AGENT_BACKENDS = {
+    "claude-agent": ("claude", "pip install cat-stack[agent]"),
+    "codex-agent": ("codex", 'pip install "cat-stack[codex-agent]"'),
+}
 
 
 def _require_http_provider(model_source, feature):
     """Raise a clear error when an HTTP-only feature is used with a
-    subscription/CLI provider (claude-code / claude-agent)."""
+    subscription/CLI provider (claude-code / claude-agent / codex-agent)."""
     if model_source in _SUBSCRIPTION_PROVIDERS:
         raise ValueError(
             f"{feature} is not supported with model_source='{model_source}'. "
-            "The Claude subscription/CLI backend supports text classification, "
+            "The subscription/CLI backends support text classification, "
             "extraction, and summarization, but not " + feature.lower() + ". "
             "Use an API-key provider (e.g. model_source='anthropic') instead."
         )
@@ -1229,29 +1242,33 @@ class UnifiedLLMClient:
             # contract that callers depend on.
             return None, f"Claude CLI subprocess failed: {e} (prompt may be too large for argv)"
 
-    def _call_claude_agent(
+    def _call_agent_backend(
         self,
         messages: list,
         thinking_budget: int = None,
     ) -> tuple[str, str | None]:
-        """Route one completion through the cat-claws SDK adapter.
+        """Route one completion through a cat-claws SDK adapter (the
+        `claude-agent` and `codex-agent` providers — see _AGENT_BACKENDS).
 
-        Like `_call_claude_cli`, this runs on the user's Claude subscription
-        (no API key) and returns the same (text, error) contract. cat-claws is
-        an optional dependency (the `[agent]` extra); a missing install
-        degrades to a clear install hint rather than an ImportError traceback.
+        Like `_call_claude_cli`, these run on the user's subscription login
+        (no API key) and return the same (text, error) contract. cat-claws is
+        an optional dependency; a missing install degrades to a clear install
+        hint rather than an ImportError traceback. One shared body, table-
+        driven: near-duplicate provider branches are how the image-CoVe
+        silent no-op happened.
 
         The adapter is async. complete() is sync and may run inside ensemble
         worker threads, so we drive one sealed call per invocation with
         asyncio.run (a fresh loop per call) - never a shared/module-global
         loop. Message flattening mirrors _call_claude_cli exactly.
         """
+        adapter_name, install_hint = _AGENT_BACKENDS[self.provider]
         try:
             from catclaws._adapters import get_adapter
         except ImportError:
             return None, (
                 "cat-claws is not installed. Install it to use "
-                "model_source='claude-agent': pip install cat-stack[agent]"
+                f"model_source='{self.provider}': {install_hint}"
             )
         import asyncio
 
@@ -1265,7 +1282,7 @@ class UnifiedLLMClient:
         system_prompt = "\n\n".join(system_parts) if system_parts else None
         user_prompt = "\n\n".join(user_parts)
 
-        adapter = get_adapter("claude")
+        adapter = get_adapter(adapter_name)
         try:
             return asyncio.run(
                 adapter.one_shot(
@@ -1321,8 +1338,8 @@ class UnifiedLLMClient:
         if self.provider == "claude-code":
             return self._call_claude_cli(messages, max_retries=max_retries, initial_delay=initial_delay)
 
-        if self.provider == "claude-agent":
-            return self._call_claude_agent(messages, thinking_budget=thinking_budget)
+        if self.provider in _AGENT_BACKENDS:
+            return self._call_agent_backend(messages, thinking_budget=thinking_budget)
 
         headers = self._get_headers()
         payload = self._build_payload(messages, json_schema, creativity, thinking_budget=thinking_budget, force_json=force_json)
@@ -1818,6 +1835,8 @@ def _detect_model_source(user_model, model_source):
         return "claude-code"
     if model_source and model_source.lower() == "claude-agent":
         return "claude-agent"
+    if model_source and model_source.lower() == "codex-agent":
+        return "codex-agent"
     return detect_provider(user_model, provider=model_source)
 
 

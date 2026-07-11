@@ -93,6 +93,7 @@ def _get_stepback_insight(model_source, stepback, api_key, user_model, creativit
         "mistral": get_stepback_insight_mistral,
         "claude-code": get_stepback_insight_via_complete,
         "claude-agent": get_stepback_insight_via_complete,
+        "codex-agent": get_stepback_insight_via_complete,
     }
 
     func = stepback_functions.get(model_source)
@@ -413,7 +414,7 @@ def explore_corpus(
     provider = detect_provider(model, provider)
 
     # Validate api_key
-    if provider not in ("ollama", "claude-code", "claude-agent") and not api_key:
+    if provider not in ("ollama", "claude-code", "claude-agent", "codex-agent") and not api_key:
         raise ValueError(f"api_key is required for provider '{provider}'")
 
     print(f"Exploring categories for question: '{survey_question}'")
@@ -599,7 +600,7 @@ def explore_common_categories(
     provider = detect_provider(model, provider)
 
     # Validate api_key
-    if provider not in ("ollama", "claude-code", "claude-agent") and not api_key:
+    if provider not in ("ollama", "claude-code", "claude-agent", "codex-agent") and not api_key:
         raise ValueError(f"api_key is required for provider '{provider}'")
 
     # Ollama-specific checks
@@ -1065,7 +1066,7 @@ def multi_class(
     provider = detect_provider(model, provider)
 
     # Validate api_key requirement
-    if provider not in ("ollama", "claude-code", "claude-agent") and not api_key:
+    if provider not in ("ollama", "claude-code", "claude-agent", "codex-agent") and not api_key:
         raise ValueError(f"api_key is required for provider '{provider}'")
 
     # Handle categories="auto" - auto-detect categories from the data
@@ -1083,7 +1084,7 @@ def multi_class(
             max_categories=max_categories,
             categories_per_chunk=categories_per_chunk,
             divisions=divisions
-        )
+        )["top_categories"]
 
     # Build examples text for few-shot prompting
     examples = [example1, example2, example3, example4, example5, example6]
@@ -1355,7 +1356,7 @@ Provide the final corrected categorization in the same JSON format:"""
             continue
 
         if use_two_step:
-            json_result, error = ollama_two_step_classify(
+            json_result, _step1_raw, error = ollama_two_step_classify(
                 client=client,
                 response_text=response,
                 categories=categories,

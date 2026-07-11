@@ -199,8 +199,9 @@ def get_stepback_insight_via_complete(
 ):
     """Stepback insight via the central UnifiedLLMClient.complete().
 
-    For providers with no direct HTTP endpoint (claude-agent / claude-code),
-    which route through complete() rather than a provider-specific requests.post.
+    For providers with no direct HTTP endpoint (claude-agent / codex-agent /
+    claude-code), which route through complete() rather than a
+    provider-specific requests.post.
     Returns (insight_text, True) on success, (None, False) otherwise.
     """
     from cat_stack._providers import UnifiedLLMClient

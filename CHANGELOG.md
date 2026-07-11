@@ -7,6 +7,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-07-11
+
+### Added
+- **`model_source="codex-agent"` provider** — classify through a ChatGPT
+  subscription via the cat-claws CodexAdapter (openai-codex SDK; no API key),
+  alongside the existing `claude-agent` backend. Dispatch is table-driven:
+  `_call_claude_agent` became `_call_agent_backend` + `_AGENT_BACKENDS`
+  (identical body, both providers; claude-agent behavior and its install-hint
+  string unchanged and still asserted by tests). Mirrored at every
+  claude-agent site: `PROVIDER_CONFIG`, `_SUBSCRIPTION_PROVIDERS`,
+  `_detect_model_source`, ensemble preflight + probe skip, stepback routing,
+  api-key-not-required checks, and `UNSUPPORTED_BATCH_PROVIDERS` (sync
+  fallback). Image/PDF are **not yet supported** on codex-agent and raise a
+  clear "use claude-agent or an API provider" error. Extras: `agent` now
+  installs `cat-claws[claude]>=0.3.0` (same behavior as before, post
+  cat-claws extras split); new `codex-agent` extra installs
+  `cat-claws[codex]>=0.3.0`. Live-verified: 3-row codex-agent classify,
+  claude-agent regression, API canary, and a mixed codex-agent + anthropic
+  ensemble with a schema identical to an API-only panel
+  (`test_live_codex_agent_dispatch.py`). Dispatch tests parameterized over
+  both agent providers (`tests/test_agent_backend_dispatch.py`, renamed from
+  `test_claude_agent_dispatch.py`).
+
+### Fixed
+- **Fresh installs of cat-stack could not `import catstack`**:
+  `collapse_themes.py` imports `jellyfish` at module top (and `__init__`
+  imports collapse_themes eagerly) but `jellyfish` was never a declared
+  dependency — it worked only in environments that happened to have it.
+  Declared it. (Found by the cat-claws fresh-venv isolation gate.)
+
+Full-package bug audit (2026-07-09) — all confirmed defects, no behavior redesigns:
+
+**Crashes**
+- `multi_class()` with Ollama crashed on every row (`too many values to unpack`):
+  two call sites (`text_functions.py`, `_chunked.py`) unpacked the 3-tuple returned
+  by `ollama_two_step_classify()` into two names.
+- `image_features()` with Perplexity crashed with `UnboundLocalError` — the prompt
+  was never built for that provider branch.
+- `image_multi_class(model_source="huggingface-together")` raised "Unknown source"
+  despite having a dedicated router branch; added to the dispatch list.
+- `prompt_tune()` (and `classify(prompt_tune=True)`) crashed when model entries
+  were 4-tuples carrying a per-model options dict.
+- Legacy `.doc` files crashed with an opaque `PackageNotFoundError`; now a clear
+  "legacy .doc not supported — convert to .docx" error.
+
+**Silent no-ops / wrong results**
+- Image chain-of-verification (OpenAI-compatible and Mistral) was a silent no-op:
+  the CoVe leaves still called the removed SDK client (`client=None`) and swallowed
+  the `AttributeError`, returning the unverified reply. Ported to direct HTTP like
+  the PDF variants, with `api_key`/`base_url` threaded through.
+- `image_multi_class` rows with unreadable/NaN image paths returned
+  `processing_status="success"` with fabricated all-zero categories; they now use
+  the `{"1":"e"}` error sentinel like `pdf_multi_class` (status `error`, NA categories).
+- classify: skipped (NaN-input) rows got all-zero per-model category columns in the
+  returned DataFrames (the `safety` CSV correctly wrote NA); now NA everywhere.
+- `consensus_threshold="two-thirds"` resolved to 0.67, so an exact 2-of-3 vote failed
+  the `>=` comparison (behaviorally "unanimous" for multiple-of-3 ensembles); now exact 2/3.
+- summarize: step-back insights were gathered (and paid for) but never injected —
+  prompt builders looked them up by sanitized model name while the dict is keyed
+  by raw name.
+- classify/summarize on Google with PDF/image input: step-back turns were dropped by
+  `_call_google_multimodal`, which sent only the last message; it now sends the full
+  multi-turn contents.
+- summarize batch retries re-ran failed rows through the visual path even when
+  `input_mode="text"` (the pre-OCR item was re-fetched); retries now reuse the OCR'd text.
+- summarize image mode: `input_data` in the output (and safety CSV) contained the raw
+  `(path, label)` tuple repr; now the label plus an `image_path` column.
+- summarize: float-NaN inputs were labeled `error` instead of `skipped` in the final frame.
+- `check_verbosity` never received the model name, so it always called OpenAI (gpt-4o)
+  regardless of provider and silently no-op'd for non-OpenAI keys.
+- `pilot_test=True` ran the pilot without `system_prompt`/`two_step_classify`/
+  `categories_per_call`, so the reviewed sample didn't match the full run's configuration.
+- prompt_tune: the per-category improvement reference reset to the original baseline,
+  so an instruction that regressed the current prompt (but beat baseline) was labeled
+  "improved" and kept — the revert branch could never fire.
+- `multi_class(categories="auto")` classified into the literal dict keys
+  `counts_df`/`top_categories`/`raw_top_text` instead of the discovered categories.
+- Chunked classification (`categories_per_call=N`) silently dropped `system_prompt`
+  on every call — enabling chunking invisibly nullified prompt tuning. The parameter
+  is now threaded through `run_chunked_classification`.
+- `pilot_test=True` / `prompt_tune=True` sampled exactly **1** item instead of the
+  documented 10 (`isinstance(True, int)` is true in Python, so `True` flowed through
+  as sample size 1).
+- Embedding tiebreaker with the default `consensus_threshold="unanimous"` bucketed
+  every unanimous-positive row as a "true tie" (rate 1.0 == threshold 1.0 hit the tie
+  test first), so no confident rows existed to build centroids from and the tiebreaker
+  could never resolve anything; unanimous rows are now classified as confident first.
+- `catstack._utils.ollama_two_step_classify` (the exported duplicate) raised
+  `NameError: extract_json` on every successful Step 2 — the module never imported it;
+  now lazily imported from `text_functions` (whose copy remains the maintained one).
+- `parse_kwargs_string` (Stata/R wrapper helper): an apostrophe inside unquoted prose
+  (`note=don't worry, max_retries=3`) opened an unterminated "quote" that swallowed
+  every subsequent `key=val` pair; quotes now open only at value boundaries.
+
+**Batch mode**
+- `summarize(batch_mode=True)` with a single string submitted one request per
+  character; image input "summarized" the literal file paths. The guard now matches
+  classify (rejects image), strings are wrapped as one document, and DOCX input is
+  converted to text exactly like the sync path (DOCX conversion also added to
+  classify's batch path).
+- `classify(batch_mode=True, categories="auto")` silently submitted a paid job
+  classifying into the four one-letter categories "a"/"u"/"t"/"o"; now raises.
+- classify batch (single model) ignored a per-model `creativity` override from a
+  4-tuple options dict.
+- Batch sync fallback (HF/Perplexity/Ollama inside ensemble batch mode) nullified
+  `thinking_budget=0`, leaving reasoning at provider default — contradicting the
+  v1.6.8 "explicit zero is sent" semantics. (The true batch-API payload builder
+  still omits the field at 0, pending a live probe of per-provider batch validators.)
+
 ## [2.3.0] - 2026-07-04
 
 ### Added

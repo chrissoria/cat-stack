@@ -154,6 +154,12 @@ def image_multi_class(
             "(the text-only CLI shim). Use model_source='claude-agent' (the cat-claws "
             "subscription backend) or an API-key provider."
         )
+    if model_source == "codex-agent":
+        raise ValueError(
+            "Image classification is not yet supported with "
+            "model_source='codex-agent'. Use model_source='claude-agent' (the "
+            "multimodal subscription backend) or an API-key provider."
+        )
 
     image_files = _load_image_files(image_input)
 
@@ -399,11 +405,13 @@ Provide the final categorization in the same JSON format:"""
                         step2_prompt=step2_prompt,
                         step3_prompt=step3_prompt,
                         step4_prompt=step4_prompt,
-                        client=None,  # Not used anymore, CoVe needs refactoring too
+                        client=None,  # Deprecated - CoVe uses requests
                         user_model=user_model,
                         creativity=creativity,
                         remove_numbering=remove_numbering,
-                        image_content=image_content
+                        image_content=image_content,
+                        api_key=api_key,
+                        base_url=base_url
                     )
 
                 return reply, None
@@ -636,11 +644,12 @@ Provide the final categorization in the same JSON format:"""
                         step2_prompt=step2_prompt,
                         step3_prompt=step3_prompt,
                         step4_prompt=step4_prompt,
-                        client=None,  # Not used anymore, CoVe needs refactoring too
+                        client=None,  # Deprecated - CoVe uses requests
                         user_model=user_model,
                         creativity=creativity,
                         remove_numbering=remove_numbering,
-                        image_content=image_content
+                        image_content=image_content,
+                        api_key=api_key
                     )
 
                 return reply, None
@@ -703,7 +712,7 @@ Provide the final categorization in the same JSON format:"""
         else:
             step2_prompt = step3_prompt = step4_prompt = None
 
-        if model_source in ["openai", "perplexity", "huggingface", "xai"]:
+        if model_source in ["openai", "perplexity", "huggingface", "huggingface-together", "xai"]:
             prompt = _build_prompt_openai_mistral(encoded, ext, base_prompt_text)
             # Image content for CoVe (just the image part)
             encoded_image = f"data:image/{ext};base64,{encoded}"
@@ -755,7 +764,12 @@ Provide the final categorization in the same JSON format:"""
     for idx, img_path in enumerate(tqdm(image_files, desc="Categorizing images")):
         if img_path is None:
             link1.append("Skipped NaN input")
-            extracted_jsons.append("""{"no_valid_image": 1}""")
+            # "e" marks the row as error/NA downstream (same sentinel as
+            # pdf_multi_class) — a keyed sentinel like {"no_valid_image": 1}
+            # leaves every category column NaN, which the invalid-string
+            # detector can't see, so the row came back 'success' with
+            # fabricated all-zero categories.
+            extracted_jsons.append("""{"1":"e"}""")
             continue
 
         reply, error_msg = _process_single_image(img_path)
@@ -763,7 +777,7 @@ Provide the final categorization in the same JSON format:"""
         if error_msg:
             link1.append(error_msg)
             if "Invalid image" in error_msg:
-                extracted_jsons.append("""{"no_valid_path": 1}""")
+                extracted_jsons.append("""{"1":"e"}""")
             else:
                 extracted_jsons.append(_extract_json(reply))
         else:
@@ -1187,7 +1201,7 @@ def image_features(
             continue
         encoded_image = f"data:image/{ext};base64,{encoded}"
 
-        if model_source == "openai" or model_source == "mistral":
+        if model_source in ("openai", "mistral", "perplexity"):
             prompt = [
                 {
                     "type": "text",
