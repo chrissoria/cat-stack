@@ -97,7 +97,7 @@ cat.classify(
 ```
 
 ### `extract()`
-Discover categories from a corpus using LLM-driven exploration.
+Discover categories from a corpus using LLM-driven exploration. Since v2.5.0, text consolidation runs the full explore → `collapse_themes()` pipeline (`engine="collapse"`, the default): the entire raw label inventory reaches the semantic merge — Jaro-Winkler dedup, embedding pre-merge, quality-controlled LLM passes, then a count-guided reduction to at most `max_categories`. Pass `engine="legacy"` to reproduce pre-2.5 runs (single merge call over a truncated inventory). `collapse_kwargs` forwards options to `collapse_themes()`; `max_workers` parallelizes both extraction and consolidation.
 
 ```python
 cat.extract(
@@ -156,7 +156,7 @@ cat.collapse_themes(
 | Parameter | Default | Description |
 | --- | --- | --- |
 | `input_data` | — | List of category labels, or a frequency `Series`/`dict` (`label -> count`). |
-| `api_key` | `None` | API key for the LLM provider (required). |
+| `api_key` | `None` | API key for the LLM provider. Not required for subscription/CLI backends (`claude-code`, `claude-agent`, `codex-agent`) or `ollama`. |
 | `description` | `""` | The survey question or context, used in the merge prompt. |
 | `passes` | `1` | Number of merge iterations, or `"auto"` to iterate until the embedding-quality benchmark peaks. |
 | `max_passes` | `10` | Cap on iterations when `passes="auto"`. |
@@ -166,6 +166,8 @@ cat.collapse_themes(
 | `embedding_merge_threshold` | `0.92` | Cosine similarity at/above which labels are merged in the pre-LLM embedding step. `None`/`>=1.0` disables it. |
 | `shuffle` | `True` | Randomize order each pass so batch composition varies (improves convergence stability). |
 | `final_consolidation` | `0.82` | Cosine threshold for one greedy global embedding re-merge after all passes, collapsing cross-batch duplicates. Conservative by design (errs toward keeping categories). `False`/`None` skips it. |
+| `top_n` | `None` | If set, a final global LLM call consolidates the surviving list into at most N categories, guided by each label's generation count (frequent themes favored; overlapping labels merged rather than dropped). Guaranteed `<= top_n` via truncation plus a deterministic top-N-by-count fallback. |
+| `prune` | `False` | `True` = drop conceptual duplicates keeping one representative verbatim; never renames or merges merely-related labels. |
 | `user_model` | `"gpt-4o"` | Model for the merge phase. Use a capable model — small models can degenerate. |
 | `model_source` | `"auto"` | Provider for `user_model` (`"auto"`, `"openai"`, `"huggingface"`, …). |
 | `unique_model` | `None` | If set, run an initial extract-unique thinning phase on this (typically cheaper) model before the merge phase. `None` skips the phase (backward compatible). |
