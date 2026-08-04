@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-08-04
+
 ### Fixed
 
 - `collapse_themes()` no longer demands an `api_key` when every model in play
@@ -28,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   placeholder key. HTTP providers still get a clear missing-key error from the
   provider layer. (Found live: `explore(model_source="claude-agent")` raised
   `TypeError` before ever reaching the backend.)
+
+### Changed
+- `[agent]`/`[codex-agent]` extras now require `cat-claws>=0.3.1`, which
+  makes subscription auth the actual default (0.3.0 silently key-billed
+  whenever `ANTHROPIC_API_KEY` was set in the environment).
 
 ## [2.5.0] - 2026-08-04
 

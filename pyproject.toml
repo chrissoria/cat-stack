@@ -42,8 +42,8 @@ embeddings = ["sentence-transformers>=2.2.0"]
 # `agent` keeps its historical meaning (the Claude backend) so every shipped
 # install hint stays true; `codex-agent` matches the provider string so the
 # error-message hint is copy-pasteable.
-agent = ["cat-claws[claude]>=0.3.0"]
-codex-agent = ["cat-claws[codex]>=0.3.0"]
+agent = ["cat-claws[claude]>=0.3.1"]
+codex-agent = ["cat-claws[codex]>=0.3.1"]
 
 [project.urls]
 Documentation = "https://github.com/chrissoria/cat-stack#readme"
