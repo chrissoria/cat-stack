@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `collapse_themes()` now always returns the documented `list[str]`. A
+  `{label: count}` dict (or Series/DataFrame) input that reached an exit
+  untouched — e.g. `passes=0` with a `top_n` no-op — previously leaked the
+  input container, and the `filename` write then saved the *counts* column
+  as categories. (Found live: several saved top-12 CSVs contained integers.)
 - `explore()` and `extract()` no longer require `api_key` as a positional
   argument — it now defaults to `None`, so the subscription/CLI backends
   (`claude-code`, `claude-agent`, `codex-agent`) and `ollama` work without a

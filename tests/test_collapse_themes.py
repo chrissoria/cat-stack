@@ -287,3 +287,19 @@ def test_single_model_backward_compatible():
                         final_consolidation=False, shuffle=False)
 
     assert created == ["solo"]
+
+
+@patch("catstack.collapse_themes.detect_provider", return_value="openai")
+@patch("catstack.collapse_themes.UnifiedLLMClient")
+def test_dict_input_topn_noop_returns_label_list(mock_cls, mock_dp):
+    """Regression: a {label: count} dict reaching a no-op exit (passes=0,
+    no final consolidation, top_n larger than the list) must come back as
+    the documented list[str], not the input dict — the dict leak made
+    downstream DataFrame writes save counts instead of labels."""
+    inst = MagicMock()
+    mock_cls.return_value = inst
+
+    out = collapse_themes({"family bonds": 9, "trust": 4}, api_key="k",
+                          passes=0, final_consolidation=False, top_n=12)
+    assert out == ["family bonds", "trust"]
+    inst.complete.assert_not_called()

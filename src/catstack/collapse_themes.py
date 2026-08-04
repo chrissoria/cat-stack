@@ -301,6 +301,19 @@ def _count_guidance(current, input_data):
     return {lbl: max(int(c), orig.get(_norm_key(lbl), 0)) for lbl, c in cur.items()}
 
 
+def _as_label_list(x):
+    """Enforce the documented list[str] return contract at exit points.
+
+    Dict / Series / DataFrame inputs can reach a return untouched (e.g.
+    passes=0 with a top_n no-op), which would leak the input container —
+    and, via the filename write, save counts instead of labels."""
+    if isinstance(x, list):
+        return [str(v) for v in x]
+    if isinstance(x, dict):
+        return [str(k) for k in x]
+    return [str(k) for k in _to_counts(x)]
+
+
 def _to_counts(input_data):
     """Coerce the accepted input forms into a {category: count} dict."""
     if isinstance(input_data, pd.DataFrame):
@@ -589,6 +602,7 @@ def collapse_themes(
         if top_n and len(items) > int(top_n):
             items = _select_top_n(client, _count_guidance(items, input_data),
                                   int(top_n), description, creativity, dedupe_threshold)
+        items = _as_label_list(items)
         if filename:
             pd.DataFrame({"category": items}).to_csv(filename, index=False)
             print(f"Collapsed categories saved to {filename}")
@@ -674,6 +688,7 @@ def collapse_themes(
         current = _select_top_n(client, _count_guidance(current, input_data),
                                 int(top_n), description, creativity, dedupe_threshold)
 
+    current = _as_label_list(current)
     if filename:
         pd.DataFrame({"category": current}).to_csv(filename, index=False)
         print(f"Collapsed categories saved to {filename}")
