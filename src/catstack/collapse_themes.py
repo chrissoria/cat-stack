@@ -208,6 +208,14 @@ def _collapse_batch(client, batch, description, creativity, mode="unique"):
             if label:
                 out.append(label)
 
+    if not out:
+        # Unparseable reply (no numbered list found): keep the batch unchanged
+        # rather than silently dropping every label in it. Mirrors the API-error
+        # fallback above; matters most in "merge" mode, which has no
+        # subset-of-input guarantee to fall back on.
+        sys.stderr.write("[collapse_themes] unparseable reply — keeping batch unchanged\n")
+        return [str(x).strip().lower() for x in batch]
+
     if mode in ("unique", "prune"):
         # Contraction guarantee: extract-unique/prune must only REMOVE, never add or
         # mutate. Keep only outputs that map back to an input label (by normalized
@@ -225,6 +233,72 @@ def _collapse_batch(client, batch, description, creativity, mode="unique"):
         # If parsing/matching failed entirely, fall back to the batch (no loss).
         out = subset if subset else [str(x).strip().lower() for x in batch]
     return out
+
+
+def _select_top_n(client, counts, n, description, creativity, dedupe_threshold):
+    """The "nuclear" final step: one global LLM call that consolidates the whole
+    surviving list into at most `n` categories, guided by generation counts
+    (higher = the theme recurred more often during extraction). Overlapping
+    labels are merged rather than dropped; only rare, unabsorbable themes fall
+    away. The result is guaranteed <= n: over-length replies are truncated, and
+    a failed or unparseable call falls back to the top-n labels by count
+    (deterministic)."""
+    ordered = sorted(counts, key=counts.get, reverse=True)
+    fallback = [str(x).strip().lower() for x in ordered[:n]]
+    blob = "; ".join(f"{lbl} ({counts[lbl]})" for lbl in ordered)
+    context = f' about: "{description}"' if description else ""
+    prompt = (
+        f"You are given category labels{context}. Each label is followed by a count in "
+        "parentheses: how many times it was independently generated during extraction — "
+        "higher counts mean the theme is more common in the data. Consolidate this list "
+        f"into EXACTLY {n} final categories that best summarize the data. Favor "
+        "high-count themes; merge overlapping or related labels into one clear "
+        "representative label rather than dropping them; drop only rare themes that "
+        f"cannot reasonably fold into any of the {n}. Labels are separated by semicolons "
+        f"within triple backticks: ```{blob}```\n\n"
+        f"Return ONLY a numbered list of exactly {n} category labels, without counts. "
+        "Each line must follow this exact format, with no other text before or after "
+        "the list:\n"
+        "N. label\n\n"
+        "Example:\n"
+        "1. Employment\n"
+        "2. Education\n"
+        "3. Religion"
+    )
+    reply, error = client.complete(
+        messages=[{"role": "user", "content": prompt}],
+        creativity=creativity,
+        force_json=False,
+    )
+    if error:
+        sys.stderr.write(f"[collapse_themes] top_n call failed: {error} — "
+                         "falling back to top-n by count\n")
+        return fallback
+    out = []
+    for line in (reply or "").splitlines():
+        m = _LINE_PAT.match(line.strip())
+        if m:
+            label = _clean_label(m.group(1)).strip(" ;.,")
+            if label:
+                out.append(label)
+    out = _jw_dedupe(out, dedupe_threshold)
+    if not out:
+        sys.stderr.write("[collapse_themes] top_n reply unparseable — "
+                         "falling back to top-n by count\n")
+        return fallback
+    return out[:n]
+
+
+def _count_guidance(current, input_data):
+    """{label: count} evidence for the top_n prompt: each surviving label gets its
+    aggregate generation count from the ORIGINAL input (matched by normalized key)
+    when available, else its count in the current list."""
+    cur = _to_counts(current)
+    orig = {}
+    for k, v in _to_counts(input_data).items():
+        key = _norm_key(k)
+        orig[key] = orig.get(key, 0) + int(v)
+    return {lbl: max(int(c), orig.get(_norm_key(lbl), 0)) for lbl, c in cur.items()}
 
 
 def _to_counts(input_data):
@@ -310,6 +384,7 @@ def collapse_themes(
     embedding_merge_threshold=0.92,
     shuffle=True,
     final_consolidation=0.82,
+    top_n=None,
     prune=False,
     prune_threshold=50,
     user_model="gpt-4o",
@@ -356,7 +431,9 @@ def collapse_themes(
             which distinctions matter.
         passes (int | str): Number of collapse iterations, or "auto" to iterate
             until the deterministic quality benchmark peaks (the recommended mode
-            for a final taxonomy — pair with aggressive=True). Default 1.
+            for a final taxonomy — pair with aggressive=True). Either way,
+            iteration stops early once two consecutive passes leave the list
+            unchanged. Default 1.
         max_passes (int): Cap on iterations when passes="auto". Default 10.
         batch_size (int): Themes per LLM chunk (ceil(n / batch_size) calls per
             pass). Default 40.
@@ -383,6 +460,15 @@ def collapse_themes(
             reach. Default 0.82 — deterministic and tuned to land just above the true
             concept count (errs toward keeping categories; over-segmentation is
             preferred over over-consolidation). False/None skips.
+        top_n (int): Optional "nuclear" final step. After all passes and the final
+            consolidation, ONE global LLM call consolidates the surviving list into
+            at most `top_n` categories, guided by each label's generation count
+            (frequent themes favored; overlapping labels merged into one
+            representative rather than dropped). None (default) changes nothing
+            about existing behavior. The result is guaranteed to have <= top_n
+            labels: a failed or unparseable call falls back deterministically to
+            the top_n labels by count. Use when a compact fixed-size taxonomy is
+            required and coverage of rare themes is knowingly traded away.
         user_model (str): Model name for the merge phase. Default "gpt-4o". Use a
             capable model — small models can degenerate into repetition.
         model_source (str): Provider — "auto", "openai", "huggingface", etc.
@@ -410,7 +496,7 @@ def collapse_themes(
         list[str]: The collapsed category list after `passes` iterations.
 
     Examples:
-        >>> import cat_stack as cat
+        >>> import catstack as cat
         >>> themes = cat.explore(df['responses'], description="Why did you move?",
         ...                      api_key=key)
         >>> # Recommended: aggressive merge, auto-stop at the quality peak
@@ -469,10 +555,26 @@ def collapse_themes(
             guard += 1
             if shuffle:
                 rng.shuffle(items)
-            out = []
-            for i in range(0, len(items), prune_threshold):
-                out += _collapse_batch(client, items[i:i + prune_threshold],
-                                       description, creativity, mode="prune")
+            batches = [items[i:i + prune_threshold]
+                       for i in range(0, len(items), prune_threshold)]
+            if max_workers and max_workers > 1 and len(batches) > 1:
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+
+                results = [None] * len(batches)
+                with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                    futures = {
+                        ex.submit(_collapse_batch, client, b, description,
+                                  creativity, "prune"): i
+                        for i, b in enumerate(batches)
+                    }
+                    for fut in as_completed(futures):
+                        results[futures[fut]] = fut.result()
+                out = [label for r in results for label in (r or [])]
+            else:
+                out = []
+                for b in batches:
+                    out += _collapse_batch(client, b, description, creativity,
+                                           mode="prune")
             out = _jw_dedupe(out, dedupe_threshold)
             if progress_callback:
                 progress_callback(guard, max_passes, "collapse_themes:prune")
@@ -484,6 +586,9 @@ def collapse_themes(
             items = _jw_dedupe(
                 _collapse_batch(client, items, description, creativity, mode="prune"),
                 dedupe_threshold)
+        if top_n and len(items) > int(top_n):
+            items = _select_top_n(client, _count_guidance(items, input_data),
+                                  int(top_n), description, creativity, dedupe_threshold)
         if filename:
             pd.DataFrame({"category": items}).to_csv(filename, index=False)
             print(f"Collapsed categories saved to {filename}")
@@ -512,6 +617,7 @@ def collapse_themes(
             show_progress_bar=False,
         )
         best, best_q = None, -1.0
+        prev_key, stable = None, 0
         for p in range(max_passes):
             current = _pass(current, p)
             q = _quality(current, raw_embs)
@@ -520,12 +626,26 @@ def collapse_themes(
             if q < best_q:
                 break  # quality dropped -> the previous pass was the peak
             best, best_q = current, q
+            key = tuple(sorted(current))
+            stable = stable + 1 if key == prev_key else 0
+            prev_key = key
+            if stable >= 2:
+                break  # converged: two consecutive passes changed nothing
         current = best if best is not None else current
     else:
+        prev_key, stable = None, 0
         for p in range(int(passes)):
             current = _pass(current, p)
             if progress_callback:
                 progress_callback(p + 1, int(passes), "collapse_themes")
+            # Early stop at a fixed point: shuffling gives labels one fresh batch
+            # composition to merge under; if two consecutive passes both change
+            # nothing, further passes are near-certain no-ops — stop burning calls.
+            key = tuple(sorted(current))
+            stable = stable + 1 if key == prev_key else 0
+            prev_key = key
+            if stable >= 2:
+                break
 
     # Final global consolidation. Batched passes (and the auto loop) can only merge
     # labels that share a batch, so cross-batch lexical siblings — e.g. "tension" vs
@@ -540,7 +660,19 @@ def collapse_themes(
     # categories — over-segmentation is the preferred failure mode, not
     # over-consolidation. Set final_consolidation=False to skip.
     if final_consolidation and len(current) > 1:
+        # Order by original generation frequency first, so the greedy merge keeps
+        # the most frequently generated variant as each cluster's representative
+        # instead of whichever label the last (shuffled) pass happened to emit
+        # first. Labels the merge phase renamed have no original count and sort
+        # last, preserving their relative order (sort is stable).
+        orig_counts = {_norm_key(k): v for k, v in _to_counts(input_data).items()}
+        current = sorted(current, key=lambda c: orig_counts.get(_norm_key(c), 0),
+                         reverse=True)
         current = _embedding_merge(current, final_consolidation)
+
+    if top_n and len(_to_counts(current)) > int(top_n):
+        current = _select_top_n(client, _count_guidance(current, input_data),
+                                int(top_n), description, creativity, dedupe_threshold)
 
     if filename:
         pd.DataFrame({"category": current}).to_csv(filename, index=False)
