@@ -122,13 +122,18 @@ def _collapse_batch(client, batch, description, creativity, mode="unique"):
 
     mode="unique": extract unique categories only (remove restatements, keep
     distinct ones) — gentle, near-idempotent, guaranteed to only remove.
+    mode="prune": drop CONCEPTUAL duplicates (labels naming the same concept in
+    different words), keeping one representative per concept VERBATIM — never
+    renames or merges merely-related labels. Stronger than "unique" (catches
+    same-concept-different-words) but, unlike "merge", never collapses distinct
+    concepts. Output forced to a subset of the input.
     mode="merge": aggressively consolidate related labels into broader concepts
     while retaining meaningful distinctions — for a final compression step.
 
     Strict numbered-list prompt + strict parsing, so the reply is always a clean
     list and any stray prose is ignored. Guardrails: a failed call returns the
-    batch unchanged (no data loss); in "unique" mode the output is forced to be a
-    subset of the input (monotone, drift-free).
+    batch unchanged (no data loss); in "unique"/"prune" modes the output is forced
+    to be a subset of the input (monotone, drift-free).
     """
     items_blob = "; ".join(batch)
     context = f' about: "{description}"' if description else ""
@@ -144,6 +149,23 @@ def _collapse_batch(client, batch, description, creativity, mode="unique"):
             f"```{items_blob}```.\n\n"
             "Return ONLY a numbered list of the consolidated categories. Each line must follow this "
             "exact format, with no other text before or after the list:\n"
+            "N. label\n\n"
+            "Example:\n"
+            "1. Employment\n"
+            "2. Education\n"
+            "3. Religion"
+        )
+    elif mode == "prune":
+        prompt = (
+            f"You are given a list of category labels{context}. Some labels are DUPLICATES — they "
+            "name the SAME concept as another label using different words. Return the list with "
+            "duplicates removed. Rules: keep ONE label per distinct concept, copied EXACTLY as "
+            "written (verbatim); do NOT rename, rephrase, merge, or broaden any label; keep two "
+            "labels SEPARATE whenever they name genuinely different concepts, even if related; if "
+            "no labels duplicate each other, return them ALL unchanged. "
+            f"Labels are separated by semicolons within triple backticks: ```{items_blob}```.\n\n"
+            "Return ONLY a numbered list, using the labels exactly as they appear. Each line must "
+            "follow this exact format, with no other text before or after the list:\n"
             "N. label\n\n"
             "Example:\n"
             "1. Employment\n"
@@ -186,8 +208,8 @@ def _collapse_batch(client, batch, description, creativity, mode="unique"):
             if label:
                 out.append(label)
 
-    if mode == "unique":
-        # Contraction guarantee: extract-unique must only REMOVE, never add or
+    if mode in ("unique", "prune"):
+        # Contraction guarantee: extract-unique/prune must only REMOVE, never add or
         # mutate. Keep only outputs that map back to an input label (by normalized
         # key), as the original input string. Makes every pass monotone and
         # drift-free, immune to intermittent model rephrasing/splitting.
@@ -288,6 +310,8 @@ def collapse_themes(
     embedding_merge_threshold=0.92,
     shuffle=True,
     final_consolidation=0.82,
+    prune=False,
+    prune_threshold=50,
     user_model="gpt-4o",
     model_source="auto",
     unique_model=None,
@@ -345,6 +369,14 @@ def collapse_themes(
             0.92. None or >=1.0 skips embeddings.
         shuffle (bool): Randomize order each pass so batch composition varies.
             Default True (improves convergence stability).
+        prune (bool): If True, use the prune strategy instead of the merge/unique
+            passes: drop only CONCEPTUAL duplicates (one representative per concept,
+            kept verbatim), never renaming or merging merely-related labels, so a
+            short clean list is left intact while a long list is deduplicated. Lists
+            at/below prune_threshold go straight to a single global prune; longer
+            lists are reduced by batched prune first, then a final global prune.
+        prune_threshold (int): Max list length that goes directly to a single global
+            prune call (no batching). Default 50.
         final_consolidation (float): Cosine threshold for one greedy embedding
             re-merge over the whole result after all passes, collapsing cross-batch
             lexical-sibling duplicates that batched passes (and the auto loop) cannot
@@ -418,6 +450,44 @@ def collapse_themes(
 
     def _pass(items, p):
         return _run(client, items, mode, p)
+
+    # ── Prune strategy ───────────────────────────────────────────────────────
+    # Drop CONCEPTUAL duplicates only (keep one representative per concept,
+    # verbatim) — never rename or merge merely-related labels, so it cannot
+    # over-consolidate a short, already-clean list. Length-routed: a list at or
+    # below prune_threshold goes straight to a single global "master list" prune;
+    # a longer list is first reduced by the same prune primitive in shuffled
+    # batches (until it stops shrinking or fits the threshold), then finished with
+    # the global master prune.
+    if prune:
+        items = list(_to_counts(input_data).keys())
+        items = _jw_dedupe(items, dedupe_threshold)              # gentle, no rename
+        items = _embedding_merge(items, embedding_merge_threshold)
+        rng = random.Random(random_state)
+        guard = 0
+        while len(items) > prune_threshold and guard < max_passes:
+            guard += 1
+            if shuffle:
+                rng.shuffle(items)
+            out = []
+            for i in range(0, len(items), prune_threshold):
+                out += _collapse_batch(client, items[i:i + prune_threshold],
+                                       description, creativity, mode="prune")
+            out = _jw_dedupe(out, dedupe_threshold)
+            if progress_callback:
+                progress_callback(guard, max_passes, "collapse_themes:prune")
+            if len(out) >= len(items):     # no further reduction this round
+                items = out
+                break
+            items = out
+        if len(items) > 1:                  # final global master-list prune
+            items = _jw_dedupe(
+                _collapse_batch(client, items, description, creativity, mode="prune"),
+                dedupe_threshold)
+        if filename:
+            pd.DataFrame({"category": items}).to_csv(filename, index=False)
+            print(f"Collapsed categories saved to {filename}")
+        return items
 
     current = input_data
 
