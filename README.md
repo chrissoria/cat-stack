@@ -198,6 +198,8 @@ OpenAI, Anthropic, Google (Gemini), Mistral, Perplexity, xAI (Grok), HuggingFace
 
 All providers use the same `(model_name, provider, api_key)` tuple format. Provider is auto-detected from model name if omitted.
 
+**Subscription backends (no API key).** Three `model_source` values authenticate through a chat subscription instead of a metered key — leave `api_key` unset: `"claude-agent"` (Claude subscription via the Agent SDK; `pip install "cat-stack[agent]"`), `"claude-code"` (the Claude Code CLI, if installed — no extra needed), and `"codex-agent"` (ChatGPT subscription; `pip install "cat-stack[codex-agent]"`). Classification, extraction, exploration, and summarization all route through them.
+
 ## Features
 
 - **Automatic prompt optimization** (`prompt_tune`) — correct a small sample in a browser UI, and the system generates per-category instructions that improve accuracy
