@@ -41,7 +41,7 @@ from .collapse_themes import collapse_themes
 
 def extract(
     input_data,
-    api_key,
+    api_key=None,
     input_type="auto",
     description="",
     survey_question=None,
@@ -79,7 +79,9 @@ def extract(
             - For text: list of text responses or pandas Series
             - For image: directory path, single file, or list of image paths
             - For pdf: directory path, single file, or list of PDF paths
-        api_key (str): API key for the model provider.
+        api_key (str, optional): API key for the model provider. Not required
+            for subscription/CLI backends (claude-code, claude-agent,
+            codex-agent) or ollama.
         input_type (str): Type of input data. Options:
             - "auto" (default): Auto-detect from file extensions
             - "text": Text responses

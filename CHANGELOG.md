@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `explore()` and `extract()` no longer require `api_key` as a positional
+  argument — it now defaults to `None`, so the subscription/CLI backends
+  (`claude-code`, `claude-agent`, `codex-agent`) and `ollama` work without a
+  placeholder key. HTTP providers still get a clear missing-key error from the
+  provider layer. (Found live: `explore(model_source="claude-agent")` raised
+  `TypeError` before ever reaching the backend.)
+
 ## [2.5.0] - 2026-08-04
 
 ### Changed

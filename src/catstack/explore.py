@@ -16,7 +16,7 @@ from .text_functions import explore_common_categories
 
 def explore(
     input_data,
-    api_key,
+    api_key=None,
     description="",
     max_categories=12,
     categories_per_chunk=10,
@@ -46,7 +46,9 @@ def explore(
 
     Args:
         input_data: List of text responses or pandas Series.
-        api_key (str): API key for the model provider.
+        api_key (str, optional): API key for the model provider. Not required
+            for subscription/CLI backends (claude-code, claude-agent,
+            codex-agent) or ollama.
         description (str): Description of the data context. Content-neutral —
             for survey responses this is the question that was asked; for
             documents or posts this describes what the content is about.
