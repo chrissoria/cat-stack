@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-08-04
+
+### Changed
+- **`extract()` text consolidation rebuilt as explore → collapse_themes**
+  (`engine="collapse"`, the new default). Raw extraction now feeds the FULL
+  inventory into `collapse_themes()` — semantic pre-clean (Jaro-Winkler +
+  embeddings), quality-controlled passes, then a count-guided reduction to at
+  most `max_categories` — instead of the legacy single merge call, which
+  truncated the inventory to the top `max_categories * 3` labels by
+  exact-string count before merging (dispersed concepts could lose every
+  variant below that cutoff and never reach the merge). `engine="legacy"`
+  preserves the old behavior for reproducing pre-2.5 runs. New passthroughs:
+  `max_workers` (extraction + consolidation) and `collapse_kwargs` (forwarded
+  to `collapse_themes()`; `top_n` is always `max_categories`).
+  `raw_top_text` is `""` under the new engine. Image/PDF paths unchanged.
+
+### Added
+- **`collapse_themes(top_n=...)`** — optional final global LLM call that
+  consolidates the surviving list into at most N categories, guided by each
+  label's generation count (frequent themes favored; overlapping labels merged
+  rather than dropped). Guaranteed `<= top_n` via truncation plus a
+  deterministic top-N-by-count fallback on a failed or unparseable call.
+  Applies in both the main and prune paths. Live-verified: 283 labels -> 10
+  in one call (Qwen2.5-72B).
+- **`collapse_themes(prune=True)`** — drop conceptual duplicates keeping one
+  representative verbatim; never renames or merges merely-related labels.
+  Length-routed: short lists go straight to a single global prune.
+
+### Fixed
+- `collapse_themes()`: an unparseable merge-mode reply (no numbered list) no
+  longer silently drops the whole batch — it now falls back to the batch
+  unchanged, matching the API-error path.
+- `collapse_themes()`: fixed-passes and auto loops stop after two consecutive
+  passes that leave the list unchanged, instead of burning the remaining
+  scheduled calls at a fixed point (live: 3 calls where 5 passes were
+  requested).
+- `collapse_themes()`: the final embedding consolidation sorts by original
+  generation frequency first, so each cluster keeps its most-generated variant
+  as representative instead of whichever label the last shuffled pass emitted
+  first.
+- `collapse_themes(prune=True)` batches honor `max_workers` (previously
+  sequential; a 283-label prune that ran 75+ minutes sequentially completes
+  in ~13 minutes at `max_workers=8`).
+- Docstring examples across `extract`/`explore`/`collapse_themes` now use the
+  correct `import catstack` (was `import cat_stack`).
+
+### Tests
+- collapse_themes: 8 -> 14 (batch-loss fallback, fixed-point early stop,
+  3x top_n, prune path with parallel batches).
+- extract: new engine suite (collapse default caps at `max_categories` and
+  sees the full inventory; legacy path preserved; engine validated).
+  Deprecation-test mocks updated to the `return_raw=True` contract.
+  Full suite: 542 passing.
+
 ## [2.4.0] - 2026-07-11
 
 ### Added

@@ -36,6 +36,8 @@ from .pdf_functions import (
     explore_pdf_categories,
 )
 
+from .collapse_themes import collapse_themes
+
 
 def extract(
     input_data,
@@ -61,6 +63,9 @@ def extract(
     auto_download: bool = False,
     input_mode=None,
     domain: str = "neutral",
+    engine: str = "collapse",
+    max_workers: int = 1,
+    collapse_kwargs: dict = None,
 ):
     """
     Unified category extraction function for text, image, and PDF inputs.
@@ -111,15 +116,31 @@ def extract(
             limits. Default 0.0 (no delay).
         auto_download (bool): If True, automatically download missing Ollama
             models without prompting. Default False.
+        engine (str): Consolidation engine for text input. "collapse" (default):
+            run raw extraction (as explore() does) and consolidate the FULL
+            inventory with collapse_themes() — semantic pre-clean, quality-
+            controlled passes, then a count-guided reduction to at most
+            `max_categories`. "legacy": the pre-2.5 single merge call, which
+            truncates the inventory to the top max_categories*3 labels by
+            exact-string count before merging; kept for reproducing older runs.
+        max_workers (int): Parallel API calls for both the extraction chunks and
+            the consolidation batches (text engine="collapse" only; extraction
+            also honors it under "legacy"). Default 1.
+        collapse_kwargs (dict): Optional overrides forwarded to collapse_themes()
+            when engine="collapse" — e.g. {"prune": True} or
+            {"passes": 2, "aggressive": False}. Defaults applied first:
+            passes="auto", aggressive=True. `top_n` cannot be overridden here;
+            it is always max_categories.
 
     Returns:
         dict with keys:
             - counts_df: DataFrame of categories with counts
             - top_categories: List of top category names
-            - raw_top_text: Raw model output from final merge step
+            - raw_top_text: Raw model output from final merge step ("" when
+              engine="collapse", which has no single merge reply)
 
     Examples:
-        >>> import cat_stack as cat
+        >>> import catstack as cat
         >>>
         >>> # Extract categories from text responses
         >>> results = cat.extract(
@@ -171,7 +192,41 @@ def extract(
     resolved_description = description or ""
 
     if input_type == "text":
-        return explore_common_categories(
+        if engine not in ("collapse", "legacy"):
+            raise ValueError(f"engine must be 'collapse' or 'legacy', got '{engine}'")
+
+        if engine == "legacy":
+            return explore_common_categories(
+                input_data=input_data,
+                api_key=api_key,
+                survey_question=resolved_description,
+                max_categories=max_categories,
+                categories_per_chunk=categories_per_chunk,
+                divisions=divisions,
+                user_model=user_model,
+                creativity=creativity,
+                specificity=specificity,
+                research_question=research_question,
+                filename=filename,
+                model_source=model_source,
+                iterations=iterations,
+                random_state=random_state,
+                focus=focus,
+                progress_callback=progress_callback,
+                chunk_delay=chunk_delay,
+                auto_download=auto_download,
+                max_workers=max_workers,
+                domain=domain,
+            )
+
+        # engine="collapse": raw extraction (what explore() does), then consolidate
+        # the FULL inventory with collapse_themes(). Unlike the legacy merge, no
+        # label is truncated away before consolidation, pre-cleaning is semantic
+        # (Jaro-Winkler + embeddings) rather than exact-string, and the final
+        # count-guided top_n step guarantees at most max_categories categories.
+        import pandas as pd
+
+        raw_items = explore_common_categories(
             input_data=input_data,
             api_key=api_key,
             survey_question=resolved_description,
@@ -182,16 +237,62 @@ def extract(
             creativity=creativity,
             specificity=specificity,
             research_question=research_question,
-            filename=filename,
+            filename=None,
             model_source=model_source,
             iterations=iterations,
             random_state=random_state,
             focus=focus,
             progress_callback=progress_callback,
+            return_raw=True,
             chunk_delay=chunk_delay,
             auto_download=auto_download,
+            max_workers=max_workers,
             domain=domain,
         )
+
+        # Frequency inventory in the same shape the legacy engine returned.
+        def _normalize(cat):
+            return "/".join(sorted(t.strip().lower() for t in str(cat).split("/")))
+
+        flat = [str(x).strip() for x in raw_items if str(x).strip()]
+        if not flat:
+            raise ValueError("No categories were extracted from the model responses.")
+        inv = pd.DataFrame(flat, columns=["Category"])
+        inv["normalized"] = inv["Category"].map(_normalize)
+        counts_df = (
+            inv.groupby("normalized")
+               .agg(Category=("Category", lambda x: x.value_counts().index[0]),
+                    counts=("Category", "size"))
+               .sort_values("counts", ascending=False)
+               .reset_index(drop=True)
+        )
+
+        ck = dict(passes="auto", aggressive=True)
+        ck.update(collapse_kwargs or {})
+        ck["top_n"] = int(max_categories)  # the required N — not overridable
+        top = collapse_themes(
+            raw_items,
+            api_key=api_key,
+            description=resolved_description,
+            user_model=user_model,
+            model_source=model_source,
+            creativity=0 if creativity is None else creativity,
+            max_workers=max_workers,
+            random_state=random_state,
+            progress_callback=progress_callback,
+            **ck,
+        )
+
+        if filename:
+            pd.DataFrame({"rank": range(1, len(top) + 1), "category": top}).to_csv(
+                filename, index=False)
+            print(f"Top {len(top)} categories saved to {filename}")
+
+        return {
+            "counts_df": counts_df,
+            "top_categories": top,
+            "raw_top_text": "",
+        }
 
     elif input_type == "image":
         return explore_image_categories(

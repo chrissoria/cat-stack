@@ -77,7 +77,7 @@ def explore(
         every iteration. Length ≈ iterations × divisions × categories_per_chunk.
 
     Examples:
-        >>> import cat_stack as cat
+        >>> import catstack as cat
         >>>
         >>> raw_categories = cat.explore(
         ...     input_data=df['responses'],
