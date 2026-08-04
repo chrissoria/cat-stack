@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `collapse_themes()` no longer demands an `api_key` when every model in play
+  resolves to a keyless backend (`claude-code`, `claude-agent`, `codex-agent`,
+  `ollama`) — the eager guard made `extract()` die at the consolidation stage
+  on a subscription backend after Stage 1 (exploration) had already succeeded.
+  HTTP providers still fail fast with the same error. (Found live:
+  `catsurvey.extract(model_source="claude-agent")` raised `ValueError` after
+  completing all extraction passes.)
+
 - `collapse_themes()` now always returns the documented `list[str]`. A
   `{label: count}` dict (or Series/DataFrame) input that reached an exit
   untouched — e.g. `passes=0` with a `top_n` no-op — previously leaked the

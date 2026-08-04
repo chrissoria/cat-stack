@@ -230,6 +230,32 @@ def test_requires_api_key():
         pass
 
 
+@patch("catstack.collapse_themes.detect_provider", return_value="claude-agent")
+@patch("catstack.collapse_themes.UnifiedLLMClient")
+def test_no_api_key_ok_for_subscription_backends(mock_cls, mock_dp):
+    """Subscription/CLI backends bill no key, so the eager api_key guard must
+    not fire — the regression that made extract() die at consolidation on
+    model_source='claude-agent' after Stage 1 succeeded."""
+    inst = MagicMock()
+    inst.complete.side_effect = _half_complete
+    mock_cls.return_value = inst
+
+    out = collapse_themes(
+        [f"category {i}" for i in range(10)],
+        api_key=None,
+        model_source="claude-agent",
+        passes=1,
+        batch_size=40,
+        embedding_merge_threshold=None,
+        dedupe_threshold=1.0,
+        shuffle=False,
+    )
+
+    assert isinstance(out, list) and out
+    assert mock_cls.call_args.kwargs.get("api_key") is None
+    assert inst.complete.called
+
+
 def test_two_phase_routes_each_model_to_its_phase():
     """unique_model + merge_model must instantiate two distinct clients (each with its
     own provider) and route the unique-thinning passes to unique_model and the merge

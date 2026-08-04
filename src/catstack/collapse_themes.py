@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 from jellyfish import jaro_winkler_similarity
 
-from ._providers import UnifiedLLMClient, detect_provider
+from ._providers import UnifiedLLMClient, detect_provider, _SUBSCRIPTION_PROVIDERS
 from ._utils import _clean_label
 
 __all__ = [
@@ -438,7 +438,9 @@ def collapse_themes(
         input_data: Themes to collapse. list[str] (duplicates allowed), pandas
             Series, dict {category: count}, or DataFrame with "category"
             [and optional "count"] columns.
-        api_key (str): API key for the model provider.
+        api_key (str): API key for the model provider. Not required for
+            subscription/CLI backends (`claude-code`, `claude-agent`,
+            `codex-agent`) or `ollama`.
         description (str): Data/question context, injected into the prompt — e.g.
             the survey question the categories came from. Helps the model judge
             which distinctions matter.
@@ -518,9 +520,6 @@ def collapse_themes(
         ...     aggressive=True, passes="auto", max_workers=8,
         ... )
     """
-    if not api_key:
-        raise ValueError("collapse_themes() needs an api_key for the LLM call.")
-
     mode = "merge" if aggressive else "unique"
 
     # The main (merge) phase runs on merge_model if given, else user_model. A separate
@@ -531,6 +530,20 @@ def collapse_themes(
     merge_name = merge_model or user_model
     merge_src = merge_model_source if merge_model else model_source
     merge_provider = detect_provider(merge_name, merge_src)
+
+    # A key is only needed for providers that bill one; the subscription/CLI
+    # backends and ollama run keyless.
+    _keyless = set(_SUBSCRIPTION_PROVIDERS) | {"ollama"}
+    _providers_used = {merge_provider}
+    if unique_model:
+        _providers_used.add(detect_provider(unique_model, unique_model_source))
+    if not api_key and not _providers_used <= _keyless:
+        raise ValueError(
+            "collapse_themes() needs an api_key for the LLM call. "
+            "(Not required for the claude-code/claude-agent/codex-agent "
+            "backends or ollama.)"
+        )
+
     client = UnifiedLLMClient(provider=merge_provider, api_key=api_key, model=merge_name)
 
     def _run(cl, items, md, p):
