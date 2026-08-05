@@ -200,6 +200,8 @@ All providers use the same `(model_name, provider, api_key)` tuple format. Provi
 
 **Subscription backends (no API key).** Three `model_source` values authenticate through a chat subscription instead of a metered key — leave `api_key` unset: `"claude-agent"` (Claude subscription via the Agent SDK; `pip install "cat-stack[agent]"`), `"claude-code"` (the Claude Code CLI, if installed — no extra needed), and `"codex-agent"` (ChatGPT subscription; `pip install "cat-stack[codex-agent]"`). Classification, extraction, exploration, and summarization all route through them.
 
+**Reproducibility note:** the same nominal model can behave differently across access routes. In a seed-matched benchmark (Claude Sonnet 5, temperature 0), extraction through the Agent SDK produced more varied label phrasings than the direct API (89% vs. 74% unique raw labels), while final consolidated taxonomies were equivalent. If raw label counts matter to your analysis, record the access route alongside the model version.
+
 ## Features
 
 - **Automatic prompt optimization** (`prompt_tune`) — correct a small sample in a browser UI, and the system generates per-category instructions that improve accuracy
