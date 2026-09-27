@@ -4,8 +4,8 @@ Mocked — cat-claws is patched so no live agent is needed. One parameterized
 suite over both providers (cases moved from test_claude_agent_dispatch.py,
 not copy-pasted): PROVIDER_CONFIG presence, detection, dispatch + message
 flattening + adapter-name routing, adapter-error surfacing, and polite
-degradation when cat-claws is not installed. Plus the codex-agent image/PDF
-guards. All behavior is gated on the provider value, so these tests touch no
+degradation when cat-claws is not installed. Plus image and PDF-page
+classification routing for both backends. All behavior is gated on the provider value, so these tests touch no
 existing provider path.
 """
 import sys
@@ -102,33 +102,79 @@ class TestAgentBackendDispatch:
         assert f"model_source='{provider}'" in err
 
 
-class TestCodexAgentMultimodalGuards:
-    """codex-agent is text-only this release: image/PDF raise a clear error
-    BEFORE any file is touched (dummy paths never hit the filesystem)."""
+class _CapturingAdapter:
+    def __init__(self):
+        self.calls = []
 
-    def test_image_guard(self):
+    async def one_shot(self, prompt, system_prompt, model, thinking_budget=0, **kw):
+        self.calls.append(dict(prompt=prompt, model=model, **kw))
+        return '{"1": "1"}', None
+
+
+@pytest.fixture
+def png_file(tmp_path):
+    from PIL import Image
+    path = tmp_path / "img.png"
+    Image.new("RGB", (8, 8), "red").save(path)
+    return str(path)
+
+
+@pytest.fixture
+def pdf_file(tmp_path):
+    import fitz  # PyMuPDF
+    path = tmp_path / "doc.pdf"
+    doc = fitz.open()
+    doc.new_page().insert_text((72, 72), "hello")
+    doc.save(path)
+    return str(path)
+
+
+@pytest.mark.parametrize("provider", sorted(SPECS))
+class TestAgentMultimodalRouting:
+    """Image and PDF-page classification reach the provider's OWN cat-claws
+    adapter with the image attached (codex-agent used to be refused with a
+    "not yet supported" guard; cat-claws 0.3.2 takes images on both)."""
+
+    def _patched(self, provider):
+        adapter_name, _, _ = SPECS[provider]
+        adapter, names = _CapturingAdapter(), []
+
+        def fake_get_adapter(name):
+            names.append(name)
+            return adapter
+
+        return adapter, names, adapter_name, patch(
+            "catclaws._adapters.get_adapter", side_effect=fake_get_adapter)
+
+    def test_image_classification(self, provider, png_file):
         from catstack.image_functions import image_multi_class
 
-        with pytest.raises(ValueError, match="codex-agent"):
-            image_multi_class(
-                "a drawing", ["/nonexistent/img.png"], ["A"], api_key="",
-                user_model="gpt-5.5", model_source="codex-agent",
-            )
+        _, model, _ = SPECS[provider]
+        adapter, names, adapter_name, p = self._patched(provider)
+        with p:
+            image_multi_class("a drawing", [png_file], ["Red", "Blue"], api_key="",
+                              user_model=model, model_source=provider)
+        assert names and set(names) == {adapter_name}
+        images = adapter.calls[0]["images"]
+        assert len(images) == 1 and images[0]["media_type"] == "image/png"
 
-    def test_pdf_guard(self):
+    def test_pdf_page_classification(self, provider, pdf_file):
         from catstack.pdf_functions import pdf_multi_class
 
-        with pytest.raises(ValueError, match="codex-agent"):
-            pdf_multi_class(
-                "a form", ["/nonexistent/doc.pdf"], ["A"], api_key="",
-                user_model="gpt-5.5", model_source="codex-agent",
-            )
+        _, model, _ = SPECS[provider]
+        adapter, names, adapter_name, p = self._patched(provider)
+        with p:
+            pdf_multi_class("a form", [pdf_file], ["A", "B"], api_key="",
+                            user_model=model, model_source=provider)
+        assert set(names) == {adapter_name}
+        assert adapter.calls[0]["images"][0]["media_type"] == "image/png"
 
-    def test_guard_message_points_at_claude_agent(self):
-        from catstack.image_functions import image_multi_class
+    def test_pdf_text_mode_sends_no_image(self, provider, pdf_file):
+        from catstack.pdf_functions import pdf_multi_class
 
-        with pytest.raises(ValueError, match="claude-agent"):
-            image_multi_class(
-                "a drawing", ["/nonexistent/img.png"], ["A"], api_key="",
-                user_model="gpt-5.5", model_source="codex-agent",
-            )
+        _, model, _ = SPECS[provider]
+        adapter, _, _, p = self._patched(provider)
+        with p:
+            pdf_multi_class("a form", [pdf_file], ["A", "B"], api_key="",
+                            user_model=model, model_source=provider, mode="text")
+        assert "images" not in adapter.calls[0]

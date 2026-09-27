@@ -154,12 +154,6 @@ def image_multi_class(
             "(the text-only CLI shim). Use model_source='claude-agent' (the cat-claws "
             "subscription backend) or an API-key provider."
         )
-    if model_source == "codex-agent":
-        raise ValueError(
-            "Image classification is not yet supported with "
-            "model_source='codex-agent'. Use model_source='claude-agent' (the "
-            "multimodal subscription backend) or an API-key provider."
-        )
 
     image_files = _load_image_files(image_input)
 
@@ -677,15 +671,18 @@ Provide the final categorization in the same JSON format:"""
 
         return """{"1":"e"}""", "Max retries exceeded"
 
-    def _call_claude_agent_image(base_text, encoded, media_type):
-        """Image classification via the cat-claws multimodal adapter (Claude
-        subscription, no API key). Returns (reply, error) like _call_anthropic."""
+    def _call_agent_image(base_text, encoded, media_type):
+        """Image classification via a cat-claws multimodal adapter
+        (claude-agent or codex-agent: subscription login, no API key).
+        Returns (reply, error) like _call_anthropic."""
+        from ._providers import _AGENT_BACKENDS
+        adapter_name, install_hint = _AGENT_BACKENDS[model_source]
         try:
             from catclaws._adapters import get_adapter
         except ImportError:
-            return None, ("cat-claws is not installed. Run: pip install cat-stack[agent]")
+            return None, f"cat-claws is not installed. Run: {install_hint}"
         import asyncio
-        adapter = get_adapter("claude")
+        adapter = get_adapter(adapter_name)
         _system = ("You are an image classification engine. Follow the user's "
                    "instructions exactly and reply with only what they ask for.")
         try:
@@ -738,9 +735,11 @@ Provide the final categorization in the same JSON format:"""
             image_content = {"type": "image_url", "image_url": {"url": encoded_image, "detail": "high"}}
             return _call_mistral(prompt, step2_prompt, step3_prompt, step4_prompt, image_content)
 
-        elif model_source == "claude-agent":
+        elif model_source in ("claude-agent", "codex-agent"):
             media_type = f"image/{ext}" if ext else "image/jpeg"
-            return _call_claude_agent_image(base_prompt_text, encoded, media_type)
+            if media_type == "image/jpg":
+                media_type = "image/jpeg"
+            return _call_agent_image(base_prompt_text, encoded, media_type)
 
         else:
             raise ValueError("Unknown source! Choose from OpenAI, Anthropic, Perplexity, Google, xAI, Huggingface, or Mistral")

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.5.2] - 2026-09-27
 
+### Added
+- **`model_source="codex-agent"` now handles images and PDFs** (ChatGPT
+  subscription via cat-claws 0.3.2): image classification, PDF-page
+  classification and `summarize()` on images/PDF pages. The early
+  "not yet supported with model_source='codex-agent'" guards in
+  `image_multi_class` / `pdf_multi_class` are removed; the Claude-only
+  `_call_claude_agent_image` / `_call_claude_agent_pdf` became
+  backend-agnostic `_call_agent_image` / `_call_agent_pdf`, routed to each
+  provider's own adapter.
+- **PDF classification in `mode="text"` works on both agent backends**
+  (previously fell through to "Unknown source").
+
 ### Fixed
 - **`summarize()` with images or rendered PDF pages now works on the
   subscription agent backends** (`model_source="claude-agent"`).

@@ -735,8 +735,10 @@ PROVIDER_CONFIG = {
 
 
 # Providers that route through complete() with no HTTP endpoint of their own
-# (subscription logins / CLI). Features that build a direct HTTP request
-# (image, PDF) can't use them — guard with a clear error, not a deep crash.
+# (subscription logins / CLI). Features that build a direct HTTP request can't
+# use them — guard with a clear error, not a deep crash. (Images and PDF pages
+# DO work on the cat-claws agent backends: they go through the adapters'
+# images= argument, see _split_agent_content / _call_agent_image.)
 _SUBSCRIPTION_PROVIDERS = ("claude-code", "claude-agent", "codex-agent")
 
 # Agent-SDK backends routed through cat-claws: provider -> (adapter name,
