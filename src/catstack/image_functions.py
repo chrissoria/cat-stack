@@ -154,6 +154,8 @@ def image_multi_class(
             "(the text-only CLI shim). Use model_source='claude-agent' (the cat-claws "
             "subscription backend) or an API-key provider."
         )
+    from ._providers import _require_agent_sign_in
+    _require_agent_sign_in(model_source)
 
     image_files = _load_image_files(image_input)
 

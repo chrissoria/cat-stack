@@ -53,6 +53,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Callable, Union
 
 from ._utils import _extract_balanced_json
+from ._providers import _require_agent_sign_in
 from .text_functions import (
     UnifiedLLMClient,
     detect_provider,
@@ -684,6 +685,7 @@ def prepare_model_configs(
                     "Install: pip install cat-stack[agent]\n"
                     + "="*60
                 )
+            _require_agent_sign_in(detected_provider)
         elif detected_provider == "codex-agent":
             try:
                 import catclaws  # noqa: F401
@@ -696,6 +698,7 @@ def prepare_model_configs(
                     'Install: pip install "cat-stack[codex-agent]"\n'
                     + "="*60
                 )
+            _require_agent_sign_in(detected_provider)
         else:
             # Validate API key exists for cloud providers
             if not api_key:

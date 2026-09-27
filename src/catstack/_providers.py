@@ -790,6 +790,24 @@ def _split_agent_content(content):
     return "\n\n".join(t for t in texts if t), images
 
 
+def _require_agent_sign_in(provider):
+    """Preflight for the cat-claws subscription backends: stop before any row
+    runs when the agent CLI is signed out, instead of every row failing on
+    "not logged in". cat-claws >= 0.3.3 checks with a cheap status call (no
+    model call), offers a browser sign-in at an interactive terminal, and
+    otherwise raises NotSignedInError with instructions worded for the
+    Claude app or a terminal. No-op for other providers, and when cat-claws
+    is missing or older (the call itself then reports any problem).
+    """
+    if provider not in _AGENT_BACKENDS:
+        return
+    try:
+        from catclaws import ensure_signed_in
+    except ImportError:
+        return
+    ensure_signed_in(_AGENT_BACKENDS[provider][0])
+
+
 def _require_http_provider(model_source, feature):
     """Raise a clear error when an HTTP-only feature is used with a
     subscription/CLI provider (claude-code / claude-agent / codex-agent)."""

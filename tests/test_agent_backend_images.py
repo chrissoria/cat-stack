@@ -133,3 +133,37 @@ def test_summarize_failure_reports_its_reason(png_path):
     df = _summarize(png_path, adapter)
     assert df.loc[0, "processing_status"] == "error"
     assert "rate-limited" in df.loc[0, "error_message"]
+
+
+# --- sign-in preflight ------------------------------------------------------------
+
+class _NotSignedIn(ConnectionError):
+    pass
+
+
+@pytest.mark.real_auth
+def test_signed_out_summarize_stops_before_any_row(png_path):
+    """A signed-out agent stops the run up front with cat-claws' sign-in
+    instructions, instead of every row failing on "not logged in"."""
+    import catclaws
+    adapter = CapturingAdapter()
+
+    def refuse(agent):
+        raise _NotSignedIn(f"{agent}: not signed in -- run catclaws.login()")
+
+    with patch.object(catclaws, "ensure_signed_in", side_effect=refuse):
+        with pytest.raises(ConnectionError, match="catclaws.login"):
+            _summarize(png_path, adapter)
+    assert adapter.calls == []
+
+
+@pytest.mark.real_auth
+def test_preflight_checks_the_right_agent():
+    import catclaws
+    from catstack._providers import _require_agent_sign_in
+    seen = []
+    with patch.object(catclaws, "ensure_signed_in", side_effect=seen.append):
+        _require_agent_sign_in("claude-agent")
+        _require_agent_sign_in("codex-agent")
+        _require_agent_sign_in("anthropic")  # not an agent backend: no check
+    assert seen == ["claude", "codex"]
