@@ -794,10 +794,10 @@ def _require_agent_sign_in(provider):
     """Preflight for the cat-claws subscription backends: stop before any row
     runs when the agent CLI is signed out, instead of every row failing on
     "not logged in". cat-claws >= 0.3.3 checks with a cheap status call (no
-    model call), offers a browser sign-in at an interactive terminal, and
-    otherwise raises NotSignedInError with instructions worded for the
-    Claude app or a terminal. No-op for other providers, and when cat-claws
-    is missing or older (the call itself then reports any problem).
+    model call); if signed out it opens ONE browser sign-in automatically and
+    continues, or, where no browser can open, raises NotSignedInError with
+    instructions worded for the Claude app or a terminal. No-op for other
+    providers, and when cat-claws is missing or older.
     """
     if provider not in _AGENT_BACKENDS:
         return

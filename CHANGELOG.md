@@ -14,10 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `codex-agent`): `prepare_model_configs()` (used by `classify()` and
   `summarize()`) and `image_multi_class` / `pdf_multi_class` call
   `_require_agent_sign_in`, which runs cat-claws' `ensure_signed_in` before
-  any row. A signed-out session now stops up front with sign-in
-  instructions worded for the Claude app or a terminal (or, at an
-  interactive terminal, offers to open the browser sign-in) instead of
-  failing every row. No-op for other providers and for older cat-claws.
+  any row. Signed out -> a single browser sign-in opens automatically and
+  the run continues (cat-claws 0.3.3); where no browser can open, the run
+  stops up front with sign-in instructions instead of failing every row.
+  No-op for other providers and for older cat-claws.
 
 ### Changed
 - `agent` / `codex-agent` extras require `cat-claws>=0.3.3`.
