@@ -1490,6 +1490,53 @@ def _extract_json_for_summary(reply: str) -> str:
     return '{"summary": ""}'
 
 
+_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE)
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+# `"summary": "` ... last `"` ... then only closing braces / a fence
+_LENIENT_SUMMARY_RE = re.compile(r'"summary"\s*:\s*"(.*)"\s*\}*\s*(?:```)?\s*$', re.DOTALL)
+
+
+def _parse_summary_reply(reply) -> tuple:
+    """Read a summary out of a model reply as tolerantly as is safe.
+
+    Returns ``(json_str, error)``: ``json_str`` is a ``{"summary": ...}``
+    object and ``error`` is None, or ``error`` explains why no summary could
+    be read (so the row is retried and the reason reaches `error_message`,
+    instead of the row failing silently as it used to).
+
+    Tried in order:
+      1. strict: the first JSON object in the reply (code fences and
+         <think> blocks are fine);
+      2. lenient: a `"summary": "..."` object that is not valid JSON, most
+         often unescaped double quotes or raw newlines inside the text
+         (common with quoted category labels or non-English text);
+      3. prose: a reply with no JSON object at all is taken as the summary
+         itself (the model answered in plain text).
+    """
+    if reply is None or not str(reply).strip():
+        return '{"summary": ""}', "the model returned an empty reply"
+    text = _THINK_RE.sub("", str(reply)).strip()
+
+    json_str = _extract_json_for_summary(text)
+    ok, _ = extract_summary_from_json(json_str)
+    if ok:
+        return json_str, None
+
+    m = _LENIENT_SUMMARY_RE.search(text)
+    if m:
+        value = m.group(1).replace('\\"', '"').replace("\\n", "\n").strip()
+        if value:
+            return json.dumps({"summary": value}, ensure_ascii=False), None
+
+    if "{" not in text:
+        prose = _FENCE_RE.sub("", text).strip()
+        if prose:
+            return json.dumps({"summary": prose}, ensure_ascii=False), None
+
+    snippet = " ".join(text.split())[:200]
+    return '{"summary": ""}', f"could not read a summary from the model's reply: {snippet!r}"
+
+
 def extract_summary_from_json(json_str: str) -> tuple:
     """
     Extract summary from JSON response.
@@ -4230,10 +4277,10 @@ def summarize_ensemble(
                 if error:
                     return (model_name, '{"summary": ""}', error)
 
-                # Extract JSON from response
-                json_str = _extract_json_for_summary(response)
-
-                return (model_name, json_str, None)
+                # Read the summary; an unreadable reply is an error (retried,
+                # reported), never a silent empty summary
+                json_str, parse_error = _parse_summary_reply(response)
+                return (model_name, json_str, parse_error)
 
             except Exception as e:
                 error_msg = str(e)
@@ -4294,8 +4341,8 @@ def summarize_ensemble(
                 if error:
                     return (model_name, '{"summary": ""}', error)
 
-                json_str = _extract_json_for_summary(response)
-                return (model_name, json_str, None)
+                json_str, parse_error = _parse_summary_reply(response)
+                return (model_name, json_str, parse_error)
 
             except Exception as e:
                 return (model_name, '{"summary": ""}', str(e))
@@ -4346,10 +4393,10 @@ def summarize_ensemble(
                 if error:
                     return (model_name, '{"summary": ""}', error)
 
-                # Extract JSON from response
-                json_str = _extract_json_for_summary(response)
-
-                return (model_name, json_str, None)
+                # Read the summary; an unreadable reply is an error (retried,
+                # reported), never a silent empty summary
+                json_str, parse_error = _parse_summary_reply(response)
+                return (model_name, json_str, parse_error)
 
             except Exception as e:
                 error_msg = str(e)
@@ -4735,7 +4782,7 @@ Provide your answer in JSON format: {{"summary": "your synthesized summary"}}"""
             max_retries=max_retries,
         )
 
-        json_str = _extract_json_for_summary(response)
+        json_str, _ = _parse_summary_reply(response)
         is_valid, summary = extract_summary_from_json(json_str)
 
         if is_valid:

@@ -167,3 +167,42 @@ def test_preflight_checks_the_right_agent():
         _require_agent_sign_in("codex-agent")
         _require_agent_sign_in("anthropic")  # not an agent backend: no check
     assert seen == ["claude", "codex"]
+
+
+# --- unreadable replies are errors: retried, then reported --------------------------
+
+class _SequenceAdapter(CapturingAdapter):
+    """Replies with each item of `replies` in turn (last one repeats)."""
+    def __init__(self, replies):
+        super().__init__()
+        self.replies = list(replies)
+
+    async def one_shot(self, prompt, system_prompt, model, thinking_budget=0, **kw):
+        self.calls.append(kw)
+        reply = self.replies[min(len(self.calls), len(self.replies)) - 1]
+        return reply, None
+
+
+def _summarize_with_retry(png_path, adapter):
+    from catstack import summarize
+    with patch("catclaws._adapters.get_adapter", return_value=adapter):
+        return summarize(
+            input_data=[png_path], input_type="image", input_mode="visual",
+            description="a test figure", user_model="claude-sonnet-5",
+            model_source="claude-agent", batch_retries=1, retry_delay=0,
+        )
+
+
+def test_unreadable_reply_is_retried_and_recovers(png_path):
+    adapter = _SequenceAdapter(['{"notes": "no summary key"}', '{"summary": "Recovered."}'])
+    df = _summarize_with_retry(png_path, adapter)
+    assert len(adapter.calls) == 2  # the batch retry ran
+    assert df.loc[0, "processing_status"] == "success"
+    assert df.loc[0, "summary"] == "Recovered."
+
+
+def test_persistently_unreadable_reply_reports_why(png_path):
+    adapter = _SequenceAdapter(['{"notes": "no summary key"}'])
+    df = _summarize_with_retry(png_path, adapter)
+    assert df.loc[0, "processing_status"] == "error"
+    assert "could not read a summary" in df.loc[0, "error_message"]

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.4] - 2026-09-27
+
+### Fixed
+- **`summarize()` no longer fails silently on replies it cannot read.** An
+  unparseable reply used to become an empty summary with no error, so the
+  row showed `processing_status="error"` with a blank `error_message` and
+  the batch retry never saw it (observed live on an image summary via
+  `claude-agent`). The new `_parse_summary_reply` makes an unreadable reply
+  an error carrying a snippet of the reply, so the row is retried and, if it
+  still fails, the reason is reported.
+
+### Changed
+- **Summary parsing is more tolerant**, lowering the failure rate. In order:
+  strict JSON (code fences and `<think>` blocks are fine); a
+  `"summary": "..."` object that is not valid JSON (unescaped double quotes
+  or raw newlines in the text, common with quoted category labels and
+  non-English text); a prose reply with no JSON object is taken as the
+  summary itself. Used by text, PDF and image summaries and by ensemble
+  synthesis.
+
 ## [2.5.3] - 2026-09-27
 
 ### Added
