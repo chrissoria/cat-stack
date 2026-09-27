@@ -748,6 +748,46 @@ _AGENT_BACKENDS = {
 }
 
 
+def _split_agent_content(content):
+    """Split one message's content into (text, images) for the cat-claws
+    adapters.
+
+    Plain-string content is text only. Multimodal content is a list of blocks
+    in whichever provider shape the prompt builder produced (Anthropic
+    `image` + base64 `source`, OpenAI `image_url` data URL, Google
+    `inline_data`); text blocks are joined and image blocks become the
+    adapters' ``{"media_type", "data"}`` dicts. Unknown block types are
+    dropped rather than stringified into the prompt.
+    """
+    if not isinstance(content, list):
+        return content, []
+    texts, images = [], []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        kind = block.get("type")
+        if kind == "text":
+            texts.append(block.get("text", ""))
+        elif kind == "image":
+            src = block.get("source") or {}
+            if src.get("type") == "base64" and src.get("data"):
+                images.append({"media_type": src.get("media_type") or "image/png",
+                               "data": src["data"]})
+        elif kind == "image_url":
+            url = (block.get("image_url") or {}).get("url", "")
+            if url.startswith("data:") and ";base64," in url:
+                header, data = url.split(",", 1)
+                images.append({"media_type": header[5:].split(";", 1)[0] or "image/png",
+                               "data": data})
+        elif kind == "inline_data" and block.get("data"):
+            images.append({"media_type": block.get("mime_type") or "image/png",
+                           "data": block["data"]})
+    for im in images:  # the API wants image/jpeg, not image/jpg
+        if im["media_type"] == "image/jpg":
+            im["media_type"] = "image/jpeg"
+    return "\n\n".join(t for t in texts if t), images
+
+
 def _require_http_provider(model_source, feature):
     """Raise a clear error when an HTTP-only feature is used with a
     subscription/CLI provider (claude-code / claude-agent / codex-agent)."""
@@ -1272,17 +1312,26 @@ class UnifiedLLMClient:
             )
         import asyncio
 
+        # Multimodal content (image summaries, rendered PDF pages) arrives as
+        # a list of blocks: text goes to the prompt, images to the adapter's
+        # `images=` argument (base.AgentAdapter.one_shot contract).
         system_parts = []
         user_parts = []
+        images = []
         for msg in messages:
+            text, msg_images = _split_agent_content(msg["content"])
             if msg["role"] == "system":
-                system_parts.append(msg["content"])
+                system_parts.append(text)
             elif msg["role"] in ("user", "assistant"):
-                user_parts.append(msg["content"])
+                user_parts.append(text)
+                images.extend(msg_images)
         system_prompt = "\n\n".join(system_parts) if system_parts else None
         user_prompt = "\n\n".join(user_parts)
 
         adapter = get_adapter(adapter_name)
+        # Only pass images when there are some, so text-only calls are
+        # byte-identical to before.
+        image_kwargs = {"images": images} if images else {}
         try:
             return asyncio.run(
                 adapter.one_shot(
@@ -1290,6 +1339,7 @@ class UnifiedLLMClient:
                     system_prompt=system_prompt,
                     model=self.model,
                     thinking_budget=thinking_budget or 0,
+                    **image_kwargs,
                 )
             )
         except Exception as e:

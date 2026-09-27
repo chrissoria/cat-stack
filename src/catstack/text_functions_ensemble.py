@@ -3863,6 +3863,17 @@ multi_class_ensemble = classify_ensemble
 # Summarization helpers
 # =============================================================================
 
+def _format_item_errors(errors: dict, multi_model: bool) -> str:
+    """One row's failure reasons for the `error_message` column: the bare
+    message for a single model, "model: message" pairs for an ensemble.
+    Empty string when the row had no errors."""
+    if not errors:
+        return ""
+    if not multi_model:
+        return "; ".join(str(e) for e in errors.values())
+    return "; ".join(f"{m}: {e}" for m, e in errors.items())
+
+
 def _save_partial_summarize_results(all_results, model_configs, model_names, is_pdf_mode, filename, save_directory):
     """Save partial summarization results to CSV for safety/incremental saves."""
     rows = []
@@ -3895,6 +3906,7 @@ def _save_partial_summarize_results(all_results, model_configs, model_names, is_
             ) else "partial"
         else:
             row["processing_status"] = "success"
+        row["error_message"] = _format_item_errors(entry["errors"], len(model_configs) > 1)
 
         rows.append(row)
 
@@ -4511,6 +4523,9 @@ def summarize_ensemble(
 
             if error and error != "skipped":
                 still_failed.append((idx, model_name))
+                # Keep the latest reason so the output reports what the
+                # final attempt actually hit.
+                all_results[idx]["errors"][model_name] = error
             else:
                 # Update the stored result
                 all_results[idx]["model_results"][model_name] = json_result
@@ -4631,9 +4646,19 @@ def summarize_ensemble(
         else:
             row["processing_status"] = "success"
 
+        # Why a row failed: previously collected per item but never written
+        # out, so failures were silent (status "error", no reason).
+        row["error_message"] = _format_item_errors(entry["errors"], len(model_configs) > 1)
+
         rows.append(row)
 
     df = pd.DataFrame(rows)
+
+    n_failed = int((df["error_message"] != "").sum()) if "error_message" in df else 0
+    if n_failed:
+        first = df.loc[df["error_message"] != "", "error_message"].iloc[0]
+        print(f"\n[CatLLM] WARNING: {n_failed} of {len(df)} item(s) had errors "
+              f"(see the error_message column). First error: {first}")
 
     # Save to file if requested
     if filename:

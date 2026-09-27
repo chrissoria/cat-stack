@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.2] - 2026-09-27
+
+### Fixed
+- **`summarize()` with images or rendered PDF pages now works on the
+  subscription agent backends** (`model_source="claude-agent"`).
+  `_call_agent_backend` joined message contents as plain strings, so a
+  multimodal message (a list of content blocks) raised `TypeError` and the
+  image never reached cat-claws, although its adapters accept
+  `images=[{"media_type", "data"}]`. The new `_split_agent_content` turns
+  each message into text plus images, reading every image block shape the
+  prompt builders emit (Anthropic `image`, OpenAI `image_url` data URLs,
+  Google `inline_data`; `image/jpg` normalized to `image/jpeg`). Text-only
+  calls are unchanged: `images` is passed only when there are some.
+- **`summarize()` failures now say why.** Each row's error was collected but
+  never written out, so a failed row showed only
+  `processing_status="error"`. The output DataFrame and the incremental
+  `safety` saves gain an `error_message` column (the message for a single
+  model, `model: message` pairs for an ensemble), the batch-retry pass keeps
+  the latest error, and a warning with the first error is printed when any
+  row fails.
+
+### Changed
+- `agent` / `codex-agent` extras now require `cat-claws>=0.3.2`, which
+  reports the Agent SDK's real failure reason (e.g. "Not logged in") instead
+  of a generic "error result: success".
+
 ## [2.5.1] - 2026-08-04
 
 ### Fixed
