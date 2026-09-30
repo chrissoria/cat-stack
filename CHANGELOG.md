@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.5] - 2026-09-29
+
 ### Fixed
 - **Adaptive-thinking Anthropic models no longer return empty replies as
   successes.** Opus 4.7 / 4.8, Sonnet 5 and Fable 5 think by default, with
