@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-09-29
+
 ### Added
 - **`collapse_themes(thinking_budget=...)`**: the reasoning depth for every
   model call a collapse makes (merge, unique and prune batches and the
