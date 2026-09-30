@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Adaptive-thinking Anthropic models no longer return empty replies as
+  successes.** Opus 4.7 / 4.8, Sonnet 5 and Fable 5 think by default, with
+  or without a `thinking` field, and the thinking counts against
+  `max_tokens`. cat-stack sent its 4096 default whenever no thinking budget
+  was set, so a long deliberation could use all of it: the reply held only a
+  thinking block (`stop_reason: "max_tokens"`), parsed to `""`, and
+  `complete()` returned `("", None)`. Observed live on `claude-sonnet-5` in
+  `collapse_themes()` extract-unique batches: 4096 of 4096 output tokens were
+  thinking, and the package kept those batches unchanged as "unparseable",
+  so the step silently did nothing. Two changes in `_providers.py`:
+  - `apply_model_params` gives these models at least 16,000 output tokens
+    (`_ANTHROPIC_ADAPTIVE_MAX_TOKENS_FLOOR`) whether or not a thinking budget
+    is set. Every Anthropic call site goes through it, including the
+    image/PDF leaves that send 1024-2048.
+  - `complete()` treats `stop_reason: "max_tokens"` as incomplete on any
+    Anthropic model: it retries once with double the room (capped at
+    32,000), then returns an error naming the truncation instead of a
+    cut-off or empty reply.
+
 ## [2.5.4] - 2026-09-27
 
 ### Fixed

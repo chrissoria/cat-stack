@@ -210,6 +210,21 @@ def _anthropic_uses_adaptive_thinking(model: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Output room for the adaptive-thinking models. They think by default, with or
+# without a `thinking` field in the request, and the thinking tokens count
+# against `max_tokens`. At cat-stack's 4096 default a long deliberation can use
+# all of it: the reply then holds only a thinking block, no answer, and
+# stop_reason "max_tokens" (seen on claude-sonnet-5 in collapse_themes()'s
+# extract-unique batches, 2026-09-29: 4096 of 4096 output tokens were thinking).
+# `apply_model_params` raises max_tokens to at least the floor for these
+# models; `complete()` retries a reply cut off at max_tokens once with double
+# the room, up to the cap, and reports it as an error if it is cut off again.
+# ---------------------------------------------------------------------------
+_ANTHROPIC_ADAPTIVE_MAX_TOKENS_FLOOR = 16000
+_ANTHROPIC_MAX_TOKENS_RETRY_CAP = 32000
+
+
+# ---------------------------------------------------------------------------
 # Canonical thinking_budget -> effort tier.
 #
 # `thinking_budget` is the single user-facing reasoning knob (a token count).
@@ -403,6 +418,19 @@ def apply_model_params(
                 payload["max_tokens"] = budget + 4096
         elif creativity is not None and temp_ok:
             payload["temperature"] = creativity
+        # Adaptive-thinking models think whether or not thinking was requested,
+        # so they need answer headroom in every case, not only when a budget is
+        # set (see _ANTHROPIC_ADAPTIVE_MAX_TOKENS_FLOOR).
+        adaptive_model = (
+            _anthropic_uses_adaptive_thinking(model)
+            or ov.get("anthropic_thinking_adaptive", False)
+        )
+        if (
+            adaptive_model
+            and "max_tokens" in payload
+            and payload["max_tokens"] < _ANTHROPIC_ADAPTIVE_MAX_TOKENS_FLOOR
+        ):
+            payload["max_tokens"] = _ANTHROPIC_ADAPTIVE_MAX_TOKENS_FLOOR
         return payload
 
     if provider == "google":
@@ -1443,6 +1471,9 @@ class UnifiedLLMClient:
         # (see the Timeout handler below).
         timeout_count = 0
         dropped_google_schema = False
+        # One retry with more room for an Anthropic reply cut off at max_tokens
+        # (see _ANTHROPIC_ADAPTIVE_MAX_TOKENS_FLOOR).
+        truncation_retried = False
 
         for attempt in range(max_retries):
             endpoint = self._get_endpoint()
@@ -1674,6 +1705,37 @@ class UnifiedLLMClient:
                 response.raise_for_status()
                 response_json = response.json()
                 result = self._parse_response(response_json)
+                if (
+                    self.provider == "anthropic"
+                    and response_json.get("stop_reason") == "max_tokens"
+                ):
+                    # Cut off at the output limit: on a thinking model the
+                    # answer may never have started (the reply is only a
+                    # thinking block, which parses to ""), and a cut-off list
+                    # or JSON object is missing its end. Neither is the
+                    # complete answer, so don't return it as a success: retry
+                    # once with double the room, then report the truncation.
+                    current = int(payload.get("max_tokens") or 0)
+                    if (
+                        not truncation_retried
+                        and current < _ANTHROPIC_MAX_TOKENS_RETRY_CAP
+                        and attempt < max_retries - 1
+                    ):
+                        truncation_retried = True
+                        payload["max_tokens"] = min(
+                            max(current * 2, _ANTHROPIC_ADAPTIVE_MAX_TOKENS_FLOOR),
+                            _ANTHROPIC_MAX_TOKENS_RETRY_CAP,
+                        )
+                        print(f"[{self.provider}/{self.model}] Reply cut off at "
+                              f"max_tokens={current}; retrying with "
+                              f"max_tokens={payload['max_tokens']}.")
+                        continue
+                    return None, (
+                        f"Reply from '{self.model}' was cut off at "
+                        f"max_tokens={current} before it finished "
+                        f"(stop_reason 'max_tokens'"
+                        f"{'; no answer text, only thinking' if not result else ''})."
+                    )
                 return result, None
 
             except requests.exceptions.Timeout:
