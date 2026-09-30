@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`collapse_themes(thinking_budget=...)`**: the reasoning depth for every
+  model call a collapse makes (merge, unique and prune batches and the
+  `top_n` step), in cat-stack's cross-provider form. `extract()` passes it
+  through `collapse_kwargs`.
+
+### Changed
+- **Low reasoning effort is the default for models that always think.**
+  `thinking_budget="auto"` (the new default) gives the adaptive-thinking
+  Anthropic models (Opus 4.7+, Sonnet 5, Fable 5) low effort. Those models
+  otherwise run at high effort, which made a long collapse slow and costly.
+  On a 40-label extract-unique batch with `claude-sonnet-5`, low effort used
+  286 output tokens against 3,186, about 20 times faster, and kept the same
+  labels (37 of 40 against 36). Every other model stays at its own default,
+  so `"auto"` never switches reasoning on where it is optional (Qwen3, some
+  Gemini and Ollama models). `thinking_budget=None` restores the previous
+  behavior for all models.
+
 ## [2.5.5] - 2026-09-29
 
 ### Fixed

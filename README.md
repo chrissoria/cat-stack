@@ -176,6 +176,7 @@ cat.collapse_themes(
 | `merge_model` | `None` | Model for the merge phase; falls back to `user_model` when `None`. |
 | `merge_model_source` | `"auto"` | Provider for `merge_model`. |
 | `creativity` | `0` | Temperature (`0` = deterministic). |
+| `thinking_budget` | `"auto"` | Reasoning depth for every call the collapse makes. `"auto"` = low effort for models that always think (the adaptive-thinking Anthropic models: Opus 4.7+, Sonnet 5, Fable 5), every other model at its own default; `None` = every model at its own default; an int = that budget for every model. On a 40-label batch, low effort cut Sonnet 5's output tokens about elevenfold with the same result. |
 | `max_workers` | `1` | Batches processed concurrently per pass. |
 | `random_state` | `None` | Seed for shuffling (per-pass seed = `random_state + pass`). |
 | `filename` | `None` | Optional CSV path to save the final list. |

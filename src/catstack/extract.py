@@ -130,7 +130,9 @@ def extract(
             also honors it under "legacy"). Default 1.
         collapse_kwargs (dict): Optional overrides forwarded to collapse_themes()
             when engine="collapse" — e.g. {"prune": True} or
-            {"passes": 2, "aggressive": False}. Defaults applied first:
+            {"passes": 2, "aggressive": False}, or {"thinking_budget": None} to run the
+            merge at each model's default reasoning effort (collapse_themes' own default,
+            "auto", is low effort for models that always think). Defaults applied first:
             passes="auto", aggressive=True. `top_n` cannot be overridden here;
             it is always max_categories.
 
