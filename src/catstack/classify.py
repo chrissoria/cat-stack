@@ -47,6 +47,31 @@ from .pdf_functions import pdf_multi_class
 _BATCH_NUDGE_MIN_REQUESTS = 500
 
 
+def _resolve_model_provider(m):
+    """Provider for one entry of a normalized `models` list, resolved the way
+    prepare_model_configs will ("auto"/None -> detect_provider). None when it
+    cannot be resolved."""
+    from ._providers import detect_provider
+
+    name, provider = None, None
+    if isinstance(m, (list, tuple)):
+        name = m[0] if len(m) >= 1 else None
+        provider = m[1] if len(m) >= 2 else None
+    elif isinstance(m, dict):
+        name = m.get("model")
+        provider = m.get("provider")
+    elif isinstance(m, str):
+        name = m
+    if not provider or provider == "auto":
+        if not name:
+            return None
+        try:
+            provider = detect_provider(name)
+        except Exception:
+            return None
+    return provider
+
+
 def _maybe_print_batch_nudge(
     input_data,
     models,
@@ -84,27 +109,11 @@ def _maybe_print_batch_nudge(
     # may still be "auto"/None in the spec, so resolve it the same way
     # prepare_model_configs will.
     from ._batch import UNSUPPORTED_BATCH_PROVIDERS
-    from ._providers import detect_provider
 
     n_capable = 0
     for m in models:
-        name, provider = None, None
-        if isinstance(m, (list, tuple)):
-            name = m[0] if len(m) >= 1 else None
-            provider = m[1] if len(m) >= 2 else None
-        elif isinstance(m, dict):
-            name = m.get("model")
-            provider = m.get("provider")
-        elif isinstance(m, str):
-            name = m
-        if not provider or provider == "auto":
-            if not name:
-                continue
-            try:
-                provider = detect_provider(name)
-            except Exception:
-                continue
-        if provider not in UNSUPPORTED_BATCH_PROVIDERS:
+        provider = _resolve_model_provider(m)
+        if provider is not None and provider not in UNSUPPORTED_BATCH_PROVIDERS:
             n_capable += 1
 
     est_requests = n_rows * n_capable
@@ -917,6 +926,23 @@ def classify(
                 except ImportError as e:
                     print(f"[CatLLM] Embedding tiebreaker unavailable: {e}")
                     print("[CatLLM] Continuing without embedding tiebreaker.")
+
+    # =========================================================================
+    # Batch mode on a provider without a batch API (single model)
+    # =========================================================================
+    # The ensemble batch path already runs such models synchronously; a single
+    # model used to raise instead, so one call site could not switch providers
+    # without also switching batch_mode. Fall back the same way, and say so.
+    if batch_mode and len(models) == 1:
+        from ._batch import UNSUPPORTED_BATCH_PROVIDERS as _NO_BATCH
+        _provider = _resolve_model_provider(models[0])
+        if _provider in _NO_BATCH:
+            print(
+                f"[CatLLM] NOTE: provider '{_provider}' has no batch API; running "
+                "batch_mode=True as ordinary synchronous calls (no batch discount). "
+                "Batch providers: openai, anthropic, google, mistral, xai."
+            )
+            batch_mode = False
 
     # =========================================================================
     # Batch mode — bypass classify_ensemble entirely

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.2] - 2026-10-14
+
+### Fixed
+- **`batch_mode=True` with a single model on a provider without a batch API
+  now runs synchronously instead of raising.** With one model on Hugging
+  Face, Perplexity or Ollama, `classify(..., batch_mode=True)` raised
+  "batch_mode=True is not supported for provider 'huggingface'", while the
+  same provider inside a multi-model batch run already fell back to ordinary
+  calls. A caller that keeps one call site and swaps only the model and
+  provider could not leave `batch_mode` on across a mixed lineup. The
+  single-model path now falls back the same way and prints a one-line notice
+  that no batch discount applies. Batch-capable providers (OpenAI,
+  Anthropic, Google, Mistral, xAI) are unchanged.
+
+### Changed
+- The provider resolution the batch-mode cost tip used is now a shared
+  helper, `_resolve_model_provider()`, used by the fallback as well.
+
 ## [2.6.1] - 2026-10-14
 
 ### Fixed
