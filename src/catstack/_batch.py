@@ -829,11 +829,19 @@ def _run_one_batch_job(
             system_prompt=prompt_params.get("system_prompt", ""),
         )
 
+        # Pass thinking_budget through unchanged, including an explicit 0
+        # ("lowest reasoning setting"), as the synchronous path does. Mapping
+        # 0 to None here sent no reasoning setting at all, so OpenAI and
+        # Gemini batch jobs ran at the provider's default reasoning (Anthropic
+        # was covered only by its own floor table). Batch jobs have no
+        # strip-and-retry, so each model's off form must be valid up front:
+        # see _OPENAI_REASONING_EFFORT_FLOORS, _GOOGLE_THINKING_LEVEL_FLOORS
+        # and _ANTHROPIC_REASONING_FLOOR in _providers.py.
         payload = client._build_payload(
             messages=messages,
             json_schema=json_schema,
             creativity=creativity,
-            thinking_budget=thinking_budget if thinking_budget and thinking_budget > 0 else None,
+            thinking_budget=thinking_budget,
         )
 
         line = _build_jsonl_line(provider, custom_id, payload, model)

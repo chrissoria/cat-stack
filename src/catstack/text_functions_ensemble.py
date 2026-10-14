@@ -789,16 +789,13 @@ def _normalize_json_keys(parsed: dict, expected_keys: set) -> dict:
     Handles keys like "1. Category name" -> "1", which some HuggingFace
     models produce when using json_object mode (no strict schema enforcement).
     """
+    from ._utils import _leading_category_number
+
     normalized = {}
     for k, v in parsed.items():
         stripped = str(k).strip()
-        # Extract leading digits
-        num_part = ""
-        for ch in stripped:
-            if ch.isdigit():
-                num_part += ch
-            else:
-                break
+        # Extract the leading category number (skipping punctuation like ".1")
+        num_part = _leading_category_number(stripped)
         norm_key = num_part if num_part else stripped
         # Prefer exact match; only use normalized key if exact not already present
         if stripped in expected_keys:

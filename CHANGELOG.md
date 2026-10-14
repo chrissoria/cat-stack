@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.3] - 2026-10-14
+
+Found by a live preflight and reasoning-token audit of a 19-model lineup.
+Every fix makes the lowest reasoning setting part of the request itself, so
+batch jobs (which have no retry) get it too.
+
+### Fixed
+- **Batch jobs now request the lowest reasoning setting.** The batch request
+  builder turned `thinking_budget=0` into `None`, so OpenAI and Gemini batch
+  jobs carried no reasoning setting and ran at the provider's default
+  (Anthropic was covered only by its own floor table). The synchronous path
+  already passed 0 through (fixed for the batch sync fallback in 2.4.0); the
+  batch builder now does the same.
+- **GPT-6 is treated as a reasoning model.** It was sent `temperature: 0`,
+  which every GPT-6 model rejects (fatal to a batch job), and no
+  `reasoning_effort`. Now no temperature, and the lowest effort each model
+  accepts: `gpt-6-luna` "none" (0 reasoning tokens), `gpt-6-astra` and
+  `gpt-6.1-sol` "low" (8-9 tokens).
+- **Gemini models whose lowest setting is a thinking level.**
+  `gemini-3.5-flash-lite` rejects `thinkingBudget: 0` with a bare "invalid
+  argument" that the 400 fallback could not recognize; it now gets
+  `thinkingLevel: "minimal"` (0 thought tokens). `gemini-3.8-flash` cannot
+  stop reasoning (`thinkingBudget: 0` still thinks, "minimal" is rejected)
+  and now gets its documented lowest, `thinkingLevel: "low"`
+  (`_GOOGLE_THINKING_LEVEL_FLOORS`).
+- **Kimi K2.6 on Hugging Face gets `enable_thinking: false`.** It reasoned
+  by default (~1,900 tokens per classification; slow enough that DeepInfra
+  returned 504s) and honors the switch on Novita and DeepInfra: 0 reasoning
+  tokens, ~100 completion tokens.
+- **Reply keys with leading punctuation parse.** DeepSeek V4 Pro on Hugging
+  Face (no schema enforcement there) answered with keys ".1", ".2", ...,
+  which read as having no category number and failed every row. Keys now
+  have leading punctuation (".", "#", "(", "[", ...) skipped before the
+  number is read (`_leading_category_number`); words are not, so a key like
+  "Category 1" is still not guessed at.
+
 ## [2.6.2] - 2026-10-14
 
 ### Fixed

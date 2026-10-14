@@ -165,6 +165,25 @@ def _extract_balanced_json(text: str) -> str | None:
     return None
 
 
+def _leading_category_number(key) -> str:
+    """The category number a reply key starts with, or "".
+
+    Handles "1", "1.", "1. Category name", and keys with leading punctuation
+    such as ".1", "#1", "(1)" or "[1]": deepseek-ai/DeepSeek-V4-Pro-0813 on
+    Hugging Face (no schema enforcement there) answered with ".1", ".2", ...
+    (observed 2026-10-14), which read as no number and failed every row.
+    Only punctuation is skipped, so a key like "Category 1" is not guessed at.
+    """
+    stripped = str(key).strip().lstrip(".#([-_:* ")
+    num_part = ""
+    for ch in stripped:
+        if ch.isdigit():
+            num_part += ch
+        else:
+            break
+    return num_part
+
+
 def validate_classification_json(json_str: str, num_categories: int) -> tuple[bool, dict | None]:
     """
     Validate that a JSON string contains valid classification output.
@@ -187,13 +206,7 @@ def validate_classification_json(json_str: str, num_categories: int) -> tuple[bo
         numeric_map = {}
         for key, val in parsed.items():
             # Extract leading number from key
-            stripped = str(key).strip()
-            num_part = ""
-            for ch in stripped:
-                if ch.isdigit():
-                    num_part += ch
-                else:
-                    break
+            num_part = _leading_category_number(key)
             if num_part:
                 numeric_map[num_part] = val
 

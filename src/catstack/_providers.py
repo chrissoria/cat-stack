@@ -86,6 +86,11 @@ def _max_total_wait_for(provider: str) -> float:
 # Entries are matched longest-prefix-first so "gpt-5.4" matches before
 # "gpt-5" — keep that invariant when extending.
 _OPENAI_REASONING_EFFORT_FLOORS = (
+    # GPT-6 (verified live 2026-10-14): Luna accepts none/low/medium/high/
+    # xhigh; Astra and 6.1 Sol accept low/medium/high/xhigh only. All three
+    # reject any temperature but the default.
+    ("gpt-6-luna", "none"),
+    ("gpt-6",   "low"),     # covers gpt-6-astra, gpt-6.1-sol
     ("gpt-5.4", "none"),
     ("gpt-5.5", "none"),
     ("gpt-5.6", "none"),
@@ -94,6 +99,30 @@ _OPENAI_REASONING_EFFORT_FLOORS = (
     ("o3",      "minimal"),
     ("o4",      "minimal"),
 )
+
+
+# Gemini models whose lowest reasoning setting is a thinkingLevel rather than
+# thinkingBudget: 0 (verified live 2026-10-14, by thoughtsTokenCount):
+#   gemini-3.5-flash-lite  rejects thinkingBudget 0 ("invalid argument");
+#                          "minimal" gives 0 thought tokens.
+#   gemini-3.8-flash       cannot stop reasoning: thinkingBudget 0 still
+#                          thinks (~300 tokens), "minimal" is rejected;
+#                          "low" is its documented lowest level.
+# Matched by exact name or name + "-" suffix, so gemini-3.8-flash does not
+# match gemini-3.8-flash-lite-tts.
+_GOOGLE_THINKING_LEVEL_FLOORS = {
+    "gemini-3.5-flash-lite": "minimal",
+    "gemini-3.8-flash": "low",
+}
+
+
+def _google_thinking_level_floor(model: str):
+    """Lowest thinkingLevel for Gemini models that need one, else None."""
+    m = (model or "").removeprefix("models/")
+    for name, level in _GOOGLE_THINKING_LEVEL_FLOORS.items():
+        if m == name or (m.startswith(name + "-") and not m.startswith(name + "-lite")):
+            return level
+    return None
 
 
 def _openai_reasoning_effort_floor(model: str) -> str:
@@ -119,6 +148,12 @@ def _openai_reasoning_effort_floor(model: str) -> str:
 # ---------------------------------------------------------------------------
 _HF_NEEDS_ENABLE_THINKING_OFF = (
     "Qwen/Qwen3",   # covers Qwen3, Qwen3.5, Qwen3.6, …
+    # Kimi K2.6 reasons by default (~1,900 tokens per classification on
+    # novita; slow enough that deepinfra returned 504s) and honors
+    # enable_thinking=False on novita and deepinfra: 0 reasoning tokens,
+    # ~100 completion tokens (verified 2026-10-14). Earlier K2 releases stay
+    # in _HF_DEFAULT_REASONING_PREFIXES below.
+    "moonshotai/Kimi-K2.6",
 )
 
 
@@ -521,6 +556,16 @@ def apply_model_params(
         if creativity is not None:
             payload.setdefault("generationConfig", {})["temperature"] = creativity
         if thinking_budget is not None:
+            level_floor = _google_thinking_level_floor(model)
+            if thinking_budget <= 0 and level_floor and not ov.get("google_thinking_floor"):
+                # Models that reject thinkingBudget: 0 (with a bare "invalid
+                # argument", which the 400 fallback in complete() cannot
+                # recognize, and the batch path has no fallback at all):
+                # request their lowest thinkingLevel instead.
+                payload.setdefault("generationConfig", {})["thinkingConfig"] = {
+                    "thinkingLevel": level_floor
+                }
+                return payload
             if thinking_budget > 0:
                 budget = max(thinking_budget, 128)
             else:
@@ -531,10 +576,12 @@ def apply_model_params(
         return payload
 
     if provider == "openai":
-        # OpenAI reasoning models (o-series, GPT-5) only accept
-        # temperature=1; reasoning_effort controls depth instead.
+        # OpenAI reasoning models (o-series, GPT-5, GPT-6) only accept
+        # temperature=1; reasoning_effort controls depth instead. GPT-6 must
+        # be listed here: the batch path has no runtime fallback, so a
+        # temperature it rejects fails the whole job.
         is_reasoning_model = any(
-            (model or "").startswith(p) for p in ("o1", "o3", "o4", "gpt-5")
+            (model or "").startswith(p) for p in ("o1", "o3", "o4", "gpt-5", "gpt-6")
         )
         if is_reasoning_model:
             if thinking_budget is not None:
