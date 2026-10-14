@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.5] - 2026-10-14
+
+### Fixed
+- **Sparse replies are accepted the first time.** A reply that codes only
+  some categories (e.g. {"3": "1"}) is valid: aggregation reads the rest as
+  0. But the per-row JSON retry loop and the formatter trigger used the
+  strict all-categories check, so such replies were re-asked (a paid call,
+  with a "JSON only" nudge, keeping whatever came back) and then sent to the
+  formatter. Both now use `classification_reply_is_usable()`, the rule
+  aggregation applies: at least one in-range category coded 0/1 after key and
+  value normalization. Replies with no usable category (category names as
+  values, out-of-range keys, errors) are still retried.
+- **One reply validator.** `text_functions.validate_classification_json`, the
+  copy the ensemble imported (and the public export), was an older duplicate
+  without the 2.6.3/2.6.4 parser fixes (".1" keys, true/false values). It now
+  delegates to `_utils.validate_classification_json`.
+
 ## [2.6.4] - 2026-10-14
 
 ### Fixed

@@ -162,57 +162,15 @@ def extract_json(reply: str) -> str:
 
 
 def validate_classification_json(json_str: str, num_categories: int) -> tuple[bool, dict | None]:
+    """Strict check that a reply codes all `num_categories` categories 0/1.
+
+    Delegates to `catstack._utils.validate_classification_json`, the single
+    implementation (it reads keys like ".1" and values like true/false). This
+    module kept an older copy that the ensemble imported, so fixes to the
+    parser did not reach it (found 2026-10-14).
     """
-    Validate that a JSON string contains valid classification output.
-
-    Args:
-        json_str: The JSON string to validate
-        num_categories: Expected number of categories
-
-    Returns:
-        tuple: (is_valid, parsed_dict or None)
-    """
-    try:
-        parsed = json.loads(json_str)
-
-        if not isinstance(parsed, dict):
-            return False, None
-
-        # Build a mapping from numeric prefix to value, handling keys like
-        # "1", "1.", "1. Category name", etc.
-        numeric_map = {}
-        for key, val in parsed.items():
-            stripped = str(key).strip()
-            num_part = ""
-            for ch in stripped:
-                if ch.isdigit():
-                    num_part += ch
-                else:
-                    break
-            if num_part:
-                numeric_map[num_part] = val
-
-        # Check that all expected keys are present and values are "0" or "1"
-        for i in range(1, num_categories + 1):
-            key = str(i)
-            if key not in parsed and key not in numeric_map:
-                return False, None
-            raw_val = parsed.get(key, numeric_map.get(key))
-            val = str(raw_val).strip()
-            if val not in ("0", "1"):
-                return False, None
-
-        # Normalize values to strings, preferring exact key match then numeric prefix
-        normalized = {}
-        for i in range(1, num_categories + 1):
-            key = str(i)
-            raw_val = parsed.get(key, numeric_map.get(key))
-            normalized[key] = str(raw_val).strip()
-        return True, normalized
-
-    except (json.JSONDecodeError, KeyError, TypeError):
-        return False, None
-
+    from ._utils import validate_classification_json as _validate
+    return _validate(json_str, num_categories)
 
 def ollama_two_step_classify(
     client,

@@ -2928,8 +2928,10 @@ Categorize text responses {cove_categorize}:
             return json_result
         cats = chunk_categories if chunk_categories is not None else categories
         n = len(cats)
-        is_valid, _ = validate_classification_json(json_result, n)
-        if is_valid:
+        # The formatter runs only on replies the aggregator cannot use, not
+        # on usable sparse ones.
+        from ._utils import classification_reply_is_usable
+        if classification_reply_is_usable(json_result, n):
             return json_result
 
         # Fast skip — once consent has been declined for this run, every
@@ -3303,7 +3305,12 @@ Categorize text responses {cove_categorize}:
                             break  # API-level failure already retried by max_retries
 
                         json_result = extract_json(reply)
-                        _json_valid, _ = validate_classification_json(json_result, _n_cats)
+                        # Re-ask only when the reply is unusable: a sparse reply
+                        # ({"3": "1"}) is read downstream with the rest as 0, and
+                        # re-asking it cost a paid call and swapped in a
+                        # different answer for the same row.
+                        from ._utils import classification_reply_is_usable
+                        _json_valid = classification_reply_is_usable(json_result, _n_cats)
 
                         if _json_valid:
                             break

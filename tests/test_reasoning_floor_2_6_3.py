@@ -131,3 +131,17 @@ def test_boolean_values_normalize():
     assert _normalize_json_keys(json.loads(reply), {"1", "2", "3"}) == {"1": "1", "2": "0", "3": "1"}
     # anything else still fails rather than being guessed at
     assert validate_classification_json(json.dumps({"1": "yes", "2": "0", "3": "0"}), 3)[0] is False
+
+
+def test_single_validator_and_usable_rule():
+    # the ensemble's validator is now the _utils one (".1" keys, true/false values)
+    import json
+    from catstack.text_functions import validate_classification_json as tf_validate
+    from catstack._utils import classification_reply_is_usable as usable
+    assert tf_validate(json.dumps({".1": "1", "2": False, "3": "0"}), 3)[0] is True
+    assert usable(json.dumps({"3": "1"}), 13)            # sparse: usable
+    assert usable(json.dumps({"1": True}), 13)
+    assert not usable(json.dumps({"1": "Family"}), 13)   # category names: not usable
+    assert not usable(json.dumps({"14": "1"}), 13)       # out of range
+    assert not usable('{"1":"e"}', 13)                    # error sentinel
+    assert not usable("not json", 13)

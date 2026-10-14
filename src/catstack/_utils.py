@@ -201,6 +201,27 @@ def _normalize_category_value(v):
     return v
 
 
+def classification_reply_is_usable(json_str: str, num_categories: int) -> bool:
+    """True when a reply carries at least one category coded 0/1, after key
+    and value normalization: the rule aggregate_results() applies, which
+    reads categories a reply leaves out as 0. A sparse reply such as
+    {"3": "1"} is usable; the strict validate_classification_json() is not
+    the right test for whether to re-ask the model or call the formatter.
+    """
+    try:
+        parsed = json.loads(json_str)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    for k, v in parsed.items():
+        num = _leading_category_number(k)
+        if num and 1 <= int(num) <= num_categories and \
+                str(_normalize_category_value(v)).strip() in ("0", "1"):
+            return True
+    return False
+
+
 def validate_classification_json(json_str: str, num_categories: int) -> tuple[bool, dict | None]:
     """
     Validate that a JSON string contains valid classification output.
