@@ -168,8 +168,11 @@ _WARNED_UNCONTROLLED_REASONING: set = set()
 _ANTHROPIC_TEMPERATURE_DEPRECATED = (
     "claude-opus-4-7",
     "claude-opus-4-8",
-    "claude-sonnet-5",
-    "claude-fable-5",
+    "claude-opus-5",      # also matches claude-opus-5-5
+    "claude-sonnet-5",    # also matches claude-sonnet-5-5
+    "claude-haiku-5",     # claude-haiku-5-5: non-default values 400
+    "claude-fable-5",     # also matches claude-fable-5-1
+    "claude-mythos-5",
 )
 
 
@@ -197,8 +200,11 @@ def _anthropic_supports_temperature(model: str) -> bool:
 _ANTHROPIC_ADAPTIVE_THINKING = (
     "claude-opus-4-7",
     "claude-opus-4-8",
-    "claude-sonnet-5",
-    "claude-fable-5",
+    "claude-opus-5",      # also matches claude-opus-5-5
+    "claude-sonnet-5",    # also matches claude-sonnet-5-5
+    "claude-haiku-5",     # claude-haiku-5-5
+    "claude-fable-5",     # also matches claude-fable-5-1
+    "claude-mythos-5",
 )
 
 
@@ -207,6 +213,68 @@ def _anthropic_uses_adaptive_thinking(model: str) -> bool:
     adaptive thinking instead."""
     m = (model or "").lower()
     return any(m.startswith(p) for p in _ANTHROPIC_ADAPTIVE_THINKING)
+
+
+# ---------------------------------------------------------------------------
+# Forced tool use. Sonnet 5.5, Opus 5.5, Fable 5.1 and Mythos 5.1 reject
+# `tool_choice: {"type": "tool"}` (and `"any"`) with a 400 — "tool_choice: type
+# "tool" and "any" are not supported for this model." — on the Messages API and
+# the Message Batches API alike. cat-stack forced the `return_categories` tool
+# to get JSON back whenever thinking was off, so every classification request
+# to these models failed. For them `_build_anthropic_payload` asks for the
+# same JSON through structured outputs (`output_config.format` with the same
+# JSON schema) instead of a tool. Haiku 5.5 is listed too so the whole 5.5
+# generation takes one path. Matched by exact-version prefix so Sonnet 5 and
+# Opus 5, which still accept forced tool use, keep the tool path.
+# `complete()` switches a client to structured outputs on a runtime 400 that
+# names tool_choice, as a safety net for families not yet listed here.
+# ---------------------------------------------------------------------------
+_ANTHROPIC_NO_FORCED_TOOL = (
+    "claude-sonnet-5-5",
+    "claude-opus-5-5",
+    "claude-haiku-5-5",
+    "claude-fable-5-1",
+    "claude-mythos-5-1",
+)
+
+
+def _anthropic_rejects_forced_tool(model: str) -> bool:
+    """True for Anthropic models that reject forced `tool_choice`."""
+    m = (model or "").lower()
+    return any(m.startswith(p) for p in _ANTHROPIC_NO_FORCED_TOOL)
+
+
+# ---------------------------------------------------------------------------
+# The lowest reasoning setting, for thinking_budget 0 / None ("reasoning off").
+# On the 5.5 generation, omitting `thinking` no longer means no thinking: these
+# models run adaptive thinking by default, and `{"type": "disabled"}` is
+# rejected on some of them. Each gets the lowest setting its API accepts:
+#   Sonnet 5.5          thinking {"type": "between_tools"}: no extended
+#                       thinking ("disabled" returns a 400)
+#   Haiku 5.5           thinking {"type": "disabled"}: accepted at its default
+#                       effort (medium); omitting it leaves thinking on
+#   Opus 5.5, Fable 5.1, Mythos 5.1
+#                       thinking cannot be turned off; output_config.effort
+#                       "low", the lowest effort level
+# Older models keep their previous behavior (thinking omitted).
+# ---------------------------------------------------------------------------
+_ANTHROPIC_REASONING_FLOOR = (
+    ("claude-sonnet-5-5", {"thinking": {"type": "between_tools"}}),
+    ("claude-haiku-5-5", {"thinking": {"type": "disabled"}}),
+    ("claude-opus-5-5", {"effort": "low"}),
+    ("claude-fable-5-1", {"effort": "low"}),
+    ("claude-mythos-5-1", {"effort": "low"}),
+)
+
+
+def _anthropic_reasoning_floor(model: str):
+    """The lowest reasoning setting for an Anthropic model whose default is to
+    think, or None for models where omitting `thinking` already means off."""
+    m = (model or "").lower()
+    for prefix, setting in _ANTHROPIC_REASONING_FLOOR:
+        if m.startswith(prefix):
+            return setting
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -416,8 +484,17 @@ def apply_model_params(
             # above it so reasoning doesn't crowd out the answer.
             if "max_tokens" in payload and payload["max_tokens"] <= budget:
                 payload["max_tokens"] = budget + 4096
-        elif creativity is not None and temp_ok:
-            payload["temperature"] = creativity
+        else:
+            # Reasoning off: on models that think by default, send the lowest
+            # setting the model accepts (see _ANTHROPIC_REASONING_FLOOR).
+            floor = _anthropic_reasoning_floor(model)
+            if floor:
+                if "thinking" in floor:
+                    payload["thinking"] = dict(floor["thinking"])
+                if "effort" in floor:
+                    payload.setdefault("output_config", {})["effort"] = floor["effort"]
+            if creativity is not None and temp_ok:
+                payload["temperature"] = creativity
         # Adaptive-thinking models think whether or not thinking was requested,
         # so they need answer headroom in every case, not only when a budget is
         # set (see _ANTHROPIC_ADAPTIVE_MAX_TOKENS_FLOOR).
@@ -995,6 +1072,9 @@ class UnifiedLLMClient:
             "anthropic_thinking_adaptive": getattr(
                 self, "_anthropic_thinking_adaptive", False
             ),
+            "anthropic_no_forced_tool": getattr(
+                self, "_anthropic_no_forced_tool", False
+            ),
             "reasoning_effort_override": getattr(
                 self, "_reasoning_effort_override", None
             ),
@@ -1118,8 +1198,12 @@ class UnifiedLLMClient:
 
         Args:
             thinking_budget: Controls extended thinking for Anthropic models.
-                             0 or None → thinking disabled.
-                             >0 → thinking enabled with budget_tokens = max(thinking_budget, 1024).
+                             0 or None → thinking off, or the lowest setting
+                             on models that think by default
+                             (_ANTHROPIC_REASONING_FLOOR).
+                             >0 → thinking on: budget_tokens = max(thinking_budget, 1024)
+                             on older models, adaptive thinking with an effort
+                             tier on newer ones.
         """
         # Extract system message if present
         system_content = None
@@ -1151,9 +1235,24 @@ class UnifiedLLMClient:
             overrides=self._param_overrides(),
         )
 
-        # Use tool calling for structured output (most reliable for Anthropic)
-        # When thinking is enabled, forced tool_choice is not allowed — use "auto"
-        if json_schema:
+        # Models that reject forced tool use get the JSON through structured
+        # outputs instead (see _ANTHROPIC_NO_FORCED_TOOL). The schema needs
+        # additionalProperties: false there.
+        no_forced_tool = (
+            _anthropic_rejects_forced_tool(self.model)
+            or self._param_overrides().get("anthropic_no_forced_tool", False)
+        )
+        if json_schema and no_forced_tool:
+            schema = dict(json_schema)
+            schema.setdefault("additionalProperties", False)
+            payload.setdefault("output_config", {})["format"] = {
+                "type": "json_schema",
+                "schema": schema,
+            }
+        # Otherwise use tool calling for structured output (most reliable for
+        # Anthropic). When thinking is enabled, forced tool_choice is not
+        # allowed — use "auto".
+        elif json_schema:
             payload["tools"] = [{
                 "name": "return_categories",
                 "description": "Return categorization results",
@@ -1571,6 +1670,32 @@ class UnifiedLLMClient:
                         payload["generationConfig"]["thinkingConfig"]["thinkingBudget"] = 128
                         print(f"\n[CatLLM] Model '{self.model}' rejected thinkingBudget=0; "
                               f"falling back to the minimum (128) and caching for this client.\n")
+                        continue
+
+                    # Anthropic rejects forced tool use on newer models
+                    # (Sonnet 5.5, Opus 5.5, Fable 5.1). Switch this client to
+                    # structured outputs, cache the decision, rebuild the
+                    # request, and retry — safety net for families not yet in
+                    # `_ANTHROPIC_NO_FORCED_TOOL`.
+                    if (
+                        self.provider == "anthropic"
+                        and "tool_choice" in error_text
+                        and isinstance(payload.get("tool_choice"), dict)
+                        and payload["tool_choice"].get("type") in ("tool", "any")
+                        and not getattr(self, "_anthropic_no_forced_tool", False)
+                    ):
+                        print(f"\n[CatLLM] Model '{self.model}' rejected forced tool use.")
+                        print(f"  Switching to structured outputs and caching for this client.\n")
+                        self._anthropic_no_forced_tool = True
+                        _schema = payload["tools"][0].get("input_schema", {})
+                        payload.pop("tools", None)
+                        payload.pop("tool_choice", None)
+                        _schema = dict(_schema)
+                        _schema.setdefault("additionalProperties", False)
+                        payload.setdefault("output_config", {})["format"] = {
+                            "type": "json_schema",
+                            "schema": _schema,
+                        }
                         continue
 
                     # Anthropic rejects `temperature` on newer models (Opus
