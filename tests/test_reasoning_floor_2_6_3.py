@@ -116,3 +116,18 @@ def test_dot_prefixed_keys_validate():
 def test_hf_reasoning_off_switch(model, off):
     p = payload("huggingface", model)
     assert (p.get("chat_template_kwargs") == {"enable_thinking": False}) == off
+
+
+def test_boolean_values_normalize():
+    # Kimi Linear on Hugging Face, observed 2026-10-14
+    import json
+    from catstack._utils import validate_classification_json, _normalize_category_value
+    from catstack.text_functions_ensemble import _normalize_json_keys
+    assert [_normalize_category_value(v) for v in (True, False, "true", " FALSE ", 1, "1", "yes")] == \
+        ["1", "0", "1", "0", 1, "1", "yes"]
+    reply = json.dumps({"1": True, "2": False, "3": "true"})
+    ok, parsed = validate_classification_json(reply, 3)
+    assert ok and parsed == {"1": "1", "2": "0", "3": "1"}
+    assert _normalize_json_keys(json.loads(reply), {"1", "2", "3"}) == {"1": "1", "2": "0", "3": "1"}
+    # anything else still fails rather than being guessed at
+    assert validate_classification_json(json.dumps({"1": "yes", "2": "0", "3": "0"}), 3)[0] is False

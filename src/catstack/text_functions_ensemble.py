@@ -786,13 +786,14 @@ def prepare_model_configs(
 def _normalize_json_keys(parsed: dict, expected_keys: set) -> dict:
     """Normalize JSON keys by extracting leading numeric prefix.
 
-    Handles keys like "1. Category name" -> "1", which some HuggingFace
+    Handles keys like "1. Category name" -> "1" (and true/false values -> "1"/"0"), which some HuggingFace
     models produce when using json_object mode (no strict schema enforcement).
     """
-    from ._utils import _leading_category_number
+    from ._utils import _leading_category_number, _normalize_category_value
 
     normalized = {}
     for k, v in parsed.items():
+        v = _normalize_category_value(v)  # true/false -> "1"/"0"
         stripped = str(k).strip()
         # Extract the leading category number (skipping punctuation like ".1")
         num_part = _leading_category_number(stripped)

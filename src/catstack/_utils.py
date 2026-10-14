@@ -184,6 +184,23 @@ def _leading_category_number(key) -> str:
     return num_part
 
 
+def _normalize_category_value(v):
+    """A reply value as "0"/"1" where it is unambiguous, else unchanged.
+
+    JSON booleans and "true"/"false" strings map to "1"/"0":
+    moonshotai/Kimi-Linear-48B-A3B-Instruct on Hugging Face (no schema
+    enforcement there) answered {"1": true, "2": false, ...} on real survey
+    rows (observed 2026-10-14), which failed every row. Integers 0/1 already
+    read as "0"/"1". Anything else is returned as is, so it still fails
+    validation rather than being guessed at.
+    """
+    if isinstance(v, bool):
+        return "1" if v else "0"
+    if isinstance(v, str) and v.strip().lower() in ("true", "false"):
+        return "1" if v.strip().lower() == "true" else "0"
+    return v
+
+
 def validate_classification_json(json_str: str, num_categories: int) -> tuple[bool, dict | None]:
     """
     Validate that a JSON string contains valid classification output.
@@ -208,14 +225,14 @@ def validate_classification_json(json_str: str, num_categories: int) -> tuple[bo
             # Extract leading number from key
             num_part = _leading_category_number(key)
             if num_part:
-                numeric_map[num_part] = val
+                numeric_map[num_part] = _normalize_category_value(val)
 
         # Check that all expected keys are present and values are "0" or "1"
         for i in range(1, num_categories + 1):
             key = str(i)
             if key not in parsed and key not in numeric_map:
                 return False, None
-            raw_val = parsed.get(key, numeric_map.get(key))
+            raw_val = _normalize_category_value(parsed.get(key, numeric_map.get(key)))
             val = str(raw_val).strip()
             if val not in ("0", "1"):
                 return False, None
@@ -224,7 +241,7 @@ def validate_classification_json(json_str: str, num_categories: int) -> tuple[bo
         normalized = {}
         for i in range(1, num_categories + 1):
             key = str(i)
-            raw_val = parsed.get(key, numeric_map.get(key))
+            raw_val = _normalize_category_value(parsed.get(key, numeric_map.get(key)))
             normalized[key] = str(raw_val).strip()
         return True, normalized
 

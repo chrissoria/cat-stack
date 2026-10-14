@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.4] - 2026-10-14
+
+### Fixed
+- **`true`/`false` reply values read as 1/0.** A model answering
+  `{"1": true, "2": false, ...}` (Kimi Linear 48B on Hugging Face, where no
+  schema is enforced) failed every row, because only "0"/"1" values were
+  accepted. JSON booleans and the strings "true"/"false" now map to "1"/"0"
+  in both reply parsers (`_normalize_category_value`, used by
+  `validate_classification_json` and `_normalize_json_keys`). Any other value
+  still fails rather than being guessed at; category names given as values
+  are not mapped back to numbers.
+
 ## [2.6.3] - 2026-10-14
 
 Found by a live preflight and reasoning-token audit of a 19-model lineup.
