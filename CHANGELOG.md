@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.1] - 2026-10-14
+
+### Fixed
+- **Classification works on the Claude 5.5 generation.** Claude Sonnet 5.5,
+  Opus 5.5 and Fable 5.1 reject forced tool use (`tool_choice: {"type":
+  "tool"}` returns a 400: "tool_choice: type "tool" and "any" are not
+  supported for this model."), on the Messages API and the Message Batches
+  API alike. cat-stack forced its `return_categories` tool whenever thinking
+  was off, so every classification request to these models failed (observed
+  live: a 5-row `batch_mode=True` classify on `claude-sonnet-5-5` ended with
+  0/5 requests succeeded). These models, and Haiku 5.5 and Mythos 5.1, now
+  get the same JSON schema through structured outputs
+  (`output_config.format`) instead of a tool (`_ANTHROPIC_NO_FORCED_TOOL`).
+  `complete()` also switches a client to structured outputs on a runtime 400
+  that names `tool_choice`, for model families not yet listed.
+- **`temperature` is no longer sent to Opus 5 / 5.5, Haiku 5.5 or Mythos**,
+  which reject it (Haiku 5.5 rejects any non-default value), and those
+  models take adaptive thinking when a thinking budget is set. They join
+  `_ANTHROPIC_TEMPERATURE_DEPRECATED` and `_ANTHROPIC_ADAPTIVE_THINKING`.
+  The batch path, which has no runtime fallback, needed both.
+
+### Changed
+- **"Reasoning off" sends the lowest setting each new model accepts.**
+  The 5.5-generation models think by default, so omitting `thinking` no
+  longer turns it off. With `thinking_budget` 0 or `None`:
+  `claude-sonnet-5-5` gets `thinking: {"type": "between_tools"}` (no
+  extended thinking; `"disabled"` returns a 400 on this model),
+  `claude-haiku-5-5` gets `thinking: {"type": "disabled"}`, and
+  `claude-opus-5-5`, `claude-fable-5-1` and `claude-mythos-5-1`, which
+  cannot turn thinking off, get `output_config.effort: "low"`
+  (`_ANTHROPIC_REASONING_FLOOR`). Earlier models are unchanged.
+
 ## [2.6.0] - 2026-09-29
 
 ### Added
