@@ -52,7 +52,7 @@ from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Callable, Union
 
-from ._utils import _extract_balanced_json
+from ._utils import _extract_balanced_json, classification_reply_is_usable
 from ._providers import _require_agent_sign_in
 from .text_functions import (
     UnifiedLLMClient,
@@ -861,27 +861,14 @@ def aggregate_results(
         if error:
             failed_models.append(model_name)
         else:
-            try:
-                parsed = json.loads(json_str)
-
-                normalized_parsed = _normalize_json_keys(parsed, expected_keys)
-
-                # Accept if at least one key is a valid numbered category
-                # with a 0/1 value. Models may only return present categories
-                # (e.g. {"3": "1"}) — missing keys default to 0 downstream.
-                valid_count = sum(
-                    1 for k, v in normalized_parsed.items()
-                    if k in expected_keys and str(v).strip() in ("0", "1")
-                )
-                if valid_count > 0:
-                    cleaned = {
-                        k: str(v).strip() for k, v in normalized_parsed.items()
-                        if k in expected_keys and str(v).strip() in ("0", "1")
-                    }
-                    successful[model_name] = cleaned
-                else:
-                    failed_models.append(model_name)
-            except json.JSONDecodeError:
+            # Models may only return present categories (e.g. {"3": "1"}) —
+            # missing keys default to 0 downstream. classification_codes()
+            # rejects replies where a code would be dropped instead.
+            from ._utils import classification_codes
+            cleaned = classification_codes(json_str, num_cats)
+            if cleaned is not None:
+                successful[model_name] = cleaned
+            else:
                 failed_models.append(model_name)
 
     # Handle failure strategies
@@ -3584,16 +3571,7 @@ Categorize text responses {cove_categorize}:
                         failed_pairs.append((row_idx, cfg))
                     else:
                         # Check JSON parsing AND schema validation
-                        try:
-                            parsed = json.loads(json_str)
-                            normalized = _normalize_json_keys(parsed, expected_keys)
-                            valid_count = sum(
-                                1 for k, v in normalized.items()
-                                if k in expected_keys and str(v).strip() in ("0", "1")
-                            )
-                            if valid_count == 0:
-                                failed_pairs.append((row_idx, cfg))
-                        except (json.JSONDecodeError, TypeError):
+                        if not classification_reply_is_usable(json_str, len(expected_keys)):
                             failed_pairs.append((row_idx, cfg))
 
             if not failed_pairs:
@@ -3638,17 +3616,8 @@ Categorize text responses {cove_categorize}:
 
                         if error is None:
                             # Verify JSON is valid and has correct schema
-                            try:
-                                parsed = json.loads(json_result)
-                                normalized = _normalize_json_keys(parsed, expected_keys)
-                                valid_count = sum(
-                                    1 for k, v in normalized.items()
-                                    if k in expected_keys and str(v).strip() in ("0", "1")
-                                )
-                                if valid_count > 0:
-                                    successes_this_round += 1
-                            except (json.JSONDecodeError, TypeError):
-                                pass
+                            if classification_reply_is_usable(json_result, len(expected_keys)):
+                                successes_this_round += 1
             else:
                 for row_idx, cfg in failed_pairs:
                     if _raw_store is None:
@@ -3659,17 +3628,8 @@ Categorize text responses {cove_categorize}:
                         _raw_store.put_recorder(row_idx, model_name, _rec, json_result, error)
                     all_results[row_idx]["model_results"][model_name] = (json_result, error)
                     if error is None:
-                        try:
-                            parsed = json.loads(json_result)
-                            normalized = _normalize_json_keys(parsed, expected_keys)
-                            valid_count = sum(
-                                1 for k, v in normalized.items()
-                                if k in expected_keys and str(v).strip() in ("0", "1")
-                            )
-                            if valid_count > 0:
-                                successes_this_round += 1
-                        except (json.JSONDecodeError, TypeError):
-                            pass
+                        if classification_reply_is_usable(json_result, len(expected_keys)):
+                            successes_this_round += 1
 
             # Recalculate aggregation for all affected rows
             affected_rows = set(row_idx for row_idx, _ in failed_pairs)

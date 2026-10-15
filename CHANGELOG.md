@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.6.6] - Unreleased
 
+### Fixed
+- **A reply could pass as all zeros while a code was dropped.** A reply was
+  accepted as soon as one key read as a category coded 0/1, and every other
+  key was dropped and read as 0. Qwen3.8-2.4T on Hugging Face answered
+  `{"<garbled>": 0, "category_2": 0, ...}` (observed 2026-10-14): the garbled
+  key read as category 1, the `category_N` keys were dropped, and the row
+  passed as all zeros, so a 1 under any of them would have been lost.
+  `_utils.classification_codes()` is now the single rule, used by the JSON
+  retry loop (and so the formatter trigger), `aggregate_results()` and the
+  batch-retry checks. A reply is unusable (re-ask, then the formatter if on,
+  else an error row) when a 0/1 code sits under a key that is not a category
+  number, when a category key carries something other than a 0/1 code, or
+  when no category is coded. Sparse replies such as `{"4": 1}` stay usable,
+  and keys that carry text and name no category (a `"reasoning"` field) are
+  ignored. Float 0.0/1.0 now read as codes.
+
 ### Added
 - **Hidden diagnostic switch `classify(test=True)`.** Output files keep only
   the parsed 0/1 matrix, so a row that came back "success" with every category

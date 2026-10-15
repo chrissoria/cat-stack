@@ -201,25 +201,66 @@ def _normalize_category_value(v):
     return v
 
 
-def classification_reply_is_usable(json_str: str, num_categories: int) -> bool:
-    """True when a reply carries at least one category coded 0/1, after key
-    and value normalization: the rule aggregate_results() applies, which
-    reads categories a reply leaves out as 0. A sparse reply such as
-    {"3": "1"} is usable; the strict validate_classification_json() is not
-    the right test for whether to re-ask the model or call the formatter.
+def _as_code(v):
+    """A reply value as "0"/"1", or None when it is not a 0/1 code."""
+    v = _normalize_category_value(v)
+    if isinstance(v, float) and v in (0.0, 1.0):
+        v = int(v)
+    s = str(v).strip()
+    return s if s in ("0", "1") else None
+
+
+def classification_codes(reply, num_categories: int):
+    """The 0/1 codes a reply gives, keyed "1".."n", or None if it is unusable.
+
+    The one rule for whether a classification reply can be scored. Categories
+    a reply leaves out are read as 0 downstream, so a sparse reply such as
+    {"4": 1} is usable. A reply is unusable (re-ask the model, then the
+    formatter, else an error row) when:
+      - it is not a JSON object, or gives no category a 0/1 code;
+      - a key that names a category carries something other than a 0/1 code
+        (e.g. reasoning text under "1"), so that category's code is unknown;
+      - a 0/1 code sits under a key that is not a category number, e.g.
+        "category_2" or a garbled key, so a code would be dropped and the
+        category silently read as 0. Qwen3.8-2.4T on Hugging Face answered
+        {"<garbled>": 0, "category_2": 0, ...} (observed 2026-10-14): the
+        garbled key read as category 1 and the reply passed as all zeros.
+    Keys that carry text, lists or objects and do not name a category (a
+    "reasoning" field, say) are ignored.
+
+    `reply` is a JSON string or an already parsed object.
     """
-    try:
-        parsed = json.loads(json_str)
-    except (json.JSONDecodeError, TypeError):
-        return False
-    if not isinstance(parsed, dict):
-        return False
-    for k, v in parsed.items():
-        num = _leading_category_number(k)
-        if num and 1 <= int(num) <= num_categories and \
-                str(_normalize_category_value(v)).strip() in ("0", "1"):
-            return True
-    return False
+    if isinstance(reply, (str, bytes, bytearray)):
+        try:
+            reply = json.loads(reply)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    if not isinstance(reply, dict):
+        return None
+    expected = {str(i) for i in range(1, num_categories + 1)}
+    codes = {}
+    for k, v in reply.items():
+        key = str(k).strip()
+        cat = key if key in expected else _leading_category_number(key)
+        code = _as_code(v)
+        if cat in expected:
+            if code is None:
+                return None
+            # an exact key ("3") wins over a prefixed one ("3. Name")
+            if key in expected or cat not in codes:
+                codes[cat] = code
+        elif code is not None:
+            return None
+    return codes or None
+
+
+def classification_reply_is_usable(json_str: str, num_categories: int) -> bool:
+    """True when classification_codes() can score the reply. A sparse reply
+    such as {"3": "1"} is usable; the strict validate_classification_json()
+    is not the right test for whether to re-ask the model or call the
+    formatter.
+    """
+    return classification_codes(json_str, num_categories) is not None
 
 
 def validate_classification_json(json_str: str, num_categories: int) -> tuple[bool, dict | None]:

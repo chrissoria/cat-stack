@@ -143,9 +143,11 @@ def test_single_model_sync_raw_columns(monkeypatch):
                      test=True, **COMMON)
 
     assert list(out.columns[-4:]) == RAW_COLS
-    # Row 0: one call, reply kept verbatim, parsed JSON recorded
+    # Row 0: text under a category key leaves that code unknown, so the
+    # reply is unusable (2.6.6): initial call + 2 JSON retries, reply kept
+    # verbatim, parsed JSON recorded
     assert out.loc[0, "raw_reply"] == TEXT_REPLY
-    assert out.loc[0, "raw_attempts"] == 1
+    assert out.loc[0, "raw_attempts"] == 3
     assert json.loads(out.loc[0, "parsed_json"]) == {
         "1": "the respondent mentions alpha", "3": "0"}
     assert out.loc[0, "raw_error"] is None
@@ -153,7 +155,7 @@ def test_single_model_sync_raw_columns(monkeypatch):
     assert out.loc[1, "raw_reply"] == "{}"
     assert out.loc[1, "raw_attempts"] == 3
     assert out.loc[1, "parsed_json"] == "{}"
-    assert len(calls) == 4
+    assert len(calls) == 6
 
 
 def test_single_model_sync_attempts_include_batch_retries(monkeypatch):
