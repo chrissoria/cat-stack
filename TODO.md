@@ -1,5 +1,26 @@
 # TODO
 
+## Consider: per-cell confidence alongside the 0/1 matrix
+
+Added 2026-10-14. An idea, not a decision.
+
+The output matrix keeps only each category's final 0/1, so a confident 1 and a
+coin-flip 1 look the same. In the closed_vs_open_llm wave 2 replays, rows that
+came back all-zero flipped between "none" and a category from run to run, while
+most rows did not: that instability is information the matrix discards.
+
+- Source to consider first: native probabilities from a decision model like
+  Jev (see below), which returns a calibrated probability for every question
+  at no extra cost. Other routes: token log-probabilities (OpenAI, Gemini,
+  some Hugging Face hosts; not Anthropic), or k repeated samples per row
+  (works everywhere, k times the cost).
+- What it would enable: selective coding (the model codes the cells it is
+  confident on, humans the rest, traced as a coverage–agreement curve) and
+  cascades (a cheap model codes everything and escalates only its uncertain
+  cells to a top-tier model), plus per-category threshold tuning.
+- Output shape: `prob_N` columns beside `category_N`, cut at 0.5 for the
+  matrix, so existing users see no change.
+
 ## Test Jev (TypeSafe AI) as a classification provider
 
 Added 2026-10-14. Not started.
