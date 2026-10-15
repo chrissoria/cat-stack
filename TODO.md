@@ -21,6 +21,28 @@ most rows did not: that instability is information the matrix discards.
 - Output shape: `prob_N` columns beside `category_N`, cut at 0.5 for the
   matrix, so existing users see no change.
 
+## Ponder: where in the text each code came from
+
+Added 2026-10-14. An open question, not a plan.
+
+The matrix records that a category was coded, not which words in the response
+led to it. Keeping that evidence (the span or phrase behind each positive code)
+would let a researcher audit disagreements with human coders, see whether the
+model applied the coders' rules or its own reading, and spot codes resting on
+incidental words. It could also feed adjudication the way coders' notes do.
+
+Things to think through:
+- How to ask for it without changing the classification itself: a second,
+  separate call per positive code, or an optional `evidence` field in the
+  same reply (which may shift the answers; test both).
+- Verifying it: a quoted span should appear verbatim in the response, which
+  can be checked mechanically (the grounded-formatter idea, applied to codes).
+- Cost and size: more output tokens per row; evidence columns repeat the
+  confidential text, so they belong with the inputs, not in shared outputs.
+- Value for research: does evidence for disagreeing cells cluster on
+  ambiguous phrasing, and does it make model codes easier for coders to
+  accept or overrule?
+
 ## Test Jev (TypeSafe AI) as a classification provider
 
 Added 2026-10-14. Not started.
