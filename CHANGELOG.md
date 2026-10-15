@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.6.6] - Unreleased
+## [2.6.6] - 2026-10-14
 
 ### Fixed
 - **A reply could pass as all zeros while a code was dropped.** A reply was
