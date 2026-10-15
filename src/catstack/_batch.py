@@ -657,6 +657,7 @@ def _parse_batch_results(
     custom_id_map: dict,
     client: "UnifiedLLMClient",
     parse_mode: str = "json",
+    raw_sink: dict = None,
 ) -> dict:
     """
     Parse the downloaded JSONL results back into per-item strings.
@@ -761,6 +762,10 @@ def _parse_batch_results(
         if idx is None:
             continue
 
+        # test=True only: keep the reply text extract_json() is about to parse
+        if raw_sink is not None:
+            raw_sink[idx] = raw_text
+
         if parse_mode == "text":
             parsed_results[idx] = (raw_text, None)
         else:
@@ -780,6 +785,7 @@ def _run_one_batch_job(
     prompt_params: dict,
     batch_poll_interval: float = 30.0,
     batch_timeout: float = 86400.0,
+    raw_sink: dict = None,
 ) -> dict:
     """
     Submit, poll, download, and parse a batch job for one model.
@@ -890,11 +896,19 @@ def _run_one_batch_job(
     )
 
     # Step 6: Parse results
+    if raw_sink is None:
+        return _parse_batch_results(
+            provider=provider,
+            raw_results=raw_results,
+            custom_id_map=custom_id_map,
+            client=client,
+        )
     return _parse_batch_results(
         provider=provider,
         raw_results=raw_results,
         custom_id_map=custom_id_map,
         client=client,
+        raw_sink=raw_sink,
     )
 
 
@@ -902,6 +916,7 @@ def _run_one_sync_model(
     cfg: dict,
     items: list,
     prompt_params: dict,
+    raw_sink: dict = None,
 ) -> dict:
     """
     Classify all items synchronously for one model (fallback for unsupported batch providers).
@@ -948,6 +963,8 @@ def _run_one_sync_model(
                 creativity=creativity,
                 thinking_budget=thinking_budget,
             )
+            if raw_sink is not None:
+                raw_sink[idx] = raw
             if err:
                 item_results[idx] = (None, err)
             else:
@@ -972,6 +989,7 @@ def run_batch_classify(
     batch_poll_interval: float = 30.0,
     batch_timeout: float = 86400.0,
     fail_strategy: str = "partial",
+    test: bool = False,
 ) -> "pd.DataFrame":
     """
     Run batch classification for a single model against a list of text items.
@@ -1008,13 +1026,24 @@ def run_batch_classify(
     # =========================================================================
     # Steps 1-6: Submit, poll, download, and parse the batch job
     # =========================================================================
-    item_results = _run_one_batch_job(
-        cfg=cfg,
-        items=items,
-        prompt_params=prompt_params,
-        batch_poll_interval=batch_poll_interval,
-        batch_timeout=batch_timeout,
-    )
+    raw_sink = {} if test else None
+    if raw_sink is None:
+        item_results = _run_one_batch_job(
+            cfg=cfg,
+            items=items,
+            prompt_params=prompt_params,
+            batch_poll_interval=batch_poll_interval,
+            batch_timeout=batch_timeout,
+        )
+    else:
+        item_results = _run_one_batch_job(
+            cfg=cfg,
+            items=items,
+            prompt_params=prompt_params,
+            batch_poll_interval=batch_poll_interval,
+            batch_timeout=batch_timeout,
+            raw_sink=raw_sink,
+        )
 
     # =========================================================================
     # Step 7: Build all_results list in the format aggregate_results expects
@@ -1043,12 +1072,23 @@ def run_batch_classify(
     # =========================================================================
     # Step 8: Build output DataFrame (reuses existing pipeline)
     # =========================================================================
+    if raw_sink is None:
+        return build_output_dataframes(
+            all_results=all_results,
+            model_configs=[cfg],
+            categories=categories,
+            filename=filename,
+            save_directory=save_directory,
+        )
     return build_output_dataframes(
         all_results=all_results,
         model_configs=[cfg],
         categories=categories,
         filename=filename,
         save_directory=save_directory,
+        raw_capture=_batch_raw_store(
+            {model_name: raw_sink}, {model_name: item_results}, len(items)
+        ),
     )
 
 
@@ -1067,6 +1107,7 @@ def run_batch_ensemble_classify(
     save_directory: str = None,
     batch_poll_interval: float = 30.0,
     batch_timeout: float = 86400.0,
+    test: bool = False,
 ) -> "pd.DataFrame":
     """
     Run batch classification for multiple models concurrently, then merge results.
@@ -1110,10 +1151,19 @@ def run_batch_ensemble_classify(
         )
 
     all_model_results = {}
+    # test=True only: one raw-reply sink per model (each written by one thread)
+    raw_sinks = {cfg["sanitized_name"]: {} for cfg in model_configs} if test else None
 
     def _run_cfg(cfg):
         model_key = cfg["sanitized_name"]
         pp = prompt_params_per_model[cfg["model"]]
+        if raw_sinks is not None:
+            sink = raw_sinks[model_key]
+            if cfg["provider"] in UNSUPPORTED_BATCH_PROVIDERS:
+                return model_key, _run_one_sync_model(cfg, items, pp, raw_sink=sink)
+            return model_key, _run_one_batch_job(
+                cfg, items, pp, batch_poll_interval, batch_timeout, raw_sink=sink
+            )
         if cfg["provider"] in UNSUPPORTED_BATCH_PROVIDERS:
             return model_key, _run_one_sync_model(cfg, items, pp)
         else:
@@ -1160,7 +1210,33 @@ def run_batch_ensemble_classify(
             "skipped": skipped,
         })
 
-    return build_output_dataframes(all_results, model_configs, categories, filename, save_directory)
+    if raw_sinks is None:
+        return build_output_dataframes(all_results, model_configs, categories, filename, save_directory)
+    return build_output_dataframes(
+        all_results, model_configs, categories, filename, save_directory,
+        raw_capture=_batch_raw_store(raw_sinks, all_model_results, len(items)),
+    )
+
+
+def _batch_raw_store(raw_sinks: dict, results_by_model: dict, n_items: int):
+    """test=True only: raw-reply records for the batch paths. One request per
+    item per model, so raw_attempts is 1 when the item came back (reply or
+    error) and 0 when the job dropped it."""
+    from ._raw_capture import RawRowStore
+
+    store = RawRowStore()
+    for model_name, sink in raw_sinks.items():
+        results = results_by_model.get(model_name, {}) or {}
+        for idx in range(n_items):
+            if idx in results:
+                json_str, error = results[idx]
+                attempts = 1
+            else:
+                json_str, error = None, "Missing from batch results"
+                attempts = 0
+            store.put(idx, model_name, sink.get(idx), attempts, json_str, error,
+                      accumulate_attempts=False)
+    return store
 
 
 # =============================================================================

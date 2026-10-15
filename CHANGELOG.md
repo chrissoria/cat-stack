@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.6] - Unreleased
+
+### Added
+- **Hidden diagnostic switch `classify(test=True)`.** Output files keep only
+  the parsed 0/1 matrix, so a row that came back "success" with every category
+  0 could not be traced to what the model replied. With `test=True` the
+  returned DataFrame (and the CSV, when `filename` is set) gets four extra
+  columns after the existing ones: `raw_reply` (the client's reply text for the
+  final attempt; for `categories_per_call`, each chunk's final reply under a
+  `----- chunk i/n -----` header), `raw_attempts` (LLM calls made for the row:
+  JSON retries, batch retries, chunks and CoVe calls included; 1 per item on
+  the batch API), `parsed_json` (the JSON string passed to aggregation) and
+  `raw_error`. With several models each column is suffixed `_<model>`, the
+  suffix the per-model `category_N_<model>` columns already use. Works on the
+  synchronous path (text, PDF, image, two-step, CoVe), the chunked path, and
+  both batch paths (single model and ensemble, including the synchronous
+  fallback for providers without a batch API). Deliberately left out of the
+  docstring, README and llms.txt. `test=False` (the default) makes the same
+  calls and returns the same columns as 2.6.5. Implemented in
+  `_raw_capture.py`; `build_output_dataframes()` gained `raw_capture=None`.
+
 ## [2.6.5] - 2026-10-14
 
 ### Fixed

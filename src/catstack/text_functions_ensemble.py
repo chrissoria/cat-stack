@@ -2528,6 +2528,8 @@ def classify_ensemble(
     input_type: str = "auto",
     # Custom system prompt (e.g. from prompt_tune())
     system_prompt: str = "",
+    # Diagnostic: keep each model's raw reply per row (see _raw_capture.py)
+    test: bool = False,
 ):
     """
     Multi-class classification with support for text AND PDF inputs, single or multiple LLM models.
@@ -3006,8 +3008,18 @@ Categorize text responses {cove_categorize}:
             categories = list(categories) + ["Other"]
             _add_unified_other = True
 
+    # test=True: raw replies per (row index, model), filled from the main
+    # thread as each classify_single() returns. None when test is off.
+    _raw_store = None
+    if test:
+        from ._raw_capture import RawReplyRecorder, RawRowStore
+        _raw_store = RawRowStore()
+
+    def _new_recorder():
+        return RawReplyRecorder() if _raw_store is not None else None
+
     # Classification function for single model + single item (text, PDF page, or image)
-    def classify_single(cfg: dict, item) -> tuple:
+    def classify_single(cfg: dict, item, _recorder=None) -> tuple:
         """
         Classify one item (text response, PDF page, or image) with one model.
 
@@ -3021,6 +3033,13 @@ Categorize text responses {cove_categorize}:
         Returns:
             tuple: (model_name, json_result, error)
         """
+        # test=True only: count calls and keep replies (client.complete and
+        # the Google multimodal call are routed through the recorder).
+        _google_mm = (
+            _recorder.wrap_fn(_call_google_multimodal)
+            if _recorder is not None else _call_google_multimodal
+        )
+
         # Resolve per-model creativity override (falls back to global)
         effective_creativity = cfg["creativity"] if cfg["creativity"] is not None else creativity
 
@@ -3052,6 +3071,8 @@ Categorize text responses {cove_categorize}:
                     api_key=cfg["api_key"],
                     model=cfg["model"]
                 )
+                if _recorder is not None:
+                    _recorder.wrap_client(client)
                 json_result, error = run_chunked_classification(
                     client=client,
                     cfg=cfg,
@@ -3086,11 +3107,12 @@ Categorize text responses {cove_categorize}:
                     build_text_prompt_fn=build_text_classification_prompt,
                     build_pdf_prompt_fn=build_pdf_classification_prompt,
                     build_image_prompt_fn=build_image_classification_prompt,
-                    google_multimodal_fn=_call_google_multimodal,
+                    google_multimodal_fn=_google_mm,
                     prepare_page_data_fn=_prepare_page_data,
                     prepare_image_data_fn=_prepare_image_data,
                     build_cove_prompts_fn=build_cove_prompts,
                     run_cove_fn=run_chain_of_verification,
+                    raw_recorder=_recorder,
                 )
                 return (cfg["sanitized_name"], json_result, error)
             except Exception as e:
@@ -3102,6 +3124,8 @@ Categorize text responses {cove_categorize}:
                 api_key=cfg["api_key"],
                 model=cfg["model"]
             )
+            if _recorder is not None:
+                _recorder.wrap_client(client)
 
             # =================================================================
             # PDF MODE: Build PDF-specific prompt
@@ -3142,7 +3166,7 @@ Categorize text responses {cove_categorize}:
                 # Handle Google API separately (different format)
                 if cfg["provider"] == "google":
                     # Google needs special handling for multimodal content
-                    reply, error = _call_google_multimodal(
+                    reply, error = _google_mm(
                         client=client,
                         messages=messages,
                         json_schema=json_schemas[cfg["model"]],
@@ -3199,7 +3223,7 @@ Categorize text responses {cove_categorize}:
                 # Handle Google API separately (different format)
                 if cfg["provider"] == "google":
                     # Google needs special handling for multimodal content
-                    reply, error = _call_google_multimodal(
+                    reply, error = _google_mm(
                         client=client,
                         messages=messages,
                         json_schema=json_schemas[cfg["model"]],
@@ -3452,20 +3476,34 @@ Categorize text responses {cove_categorize}:
             model_results = {}
             if parallel:
                 with ThreadPoolExecutor(max_workers=effective_workers) as executor:
-                    futures = {
-                        executor.submit(classify_single, cfg, item): cfg["sanitized_name"]
-                        for cfg in model_configs
-                    }
+                    if _raw_store is None:
+                        futures = {
+                            executor.submit(classify_single, cfg, item): cfg["sanitized_name"]
+                            for cfg in model_configs
+                        }
+                    else:
+                        _recs = {cfg["sanitized_name"]: _new_recorder() for cfg in model_configs}
+                        futures = {
+                            executor.submit(classify_single, cfg, item, _recs[cfg["sanitized_name"]]): cfg["sanitized_name"]
+                            for cfg in model_configs
+                        }
 
                     for future in as_completed(futures):
                         model_name, json_result, error = future.result()
                         model_results[model_name] = (json_result, error)
+                        if _raw_store is not None:
+                            _raw_store.put_recorder(idx, model_name, _recs[futures[future]], json_result, error)
 
                         # Update progress (for multi-model detailed callbacks only)
                         completed_calls[0] += 1
             else:
                 for cfg in model_configs:
-                    model_name, json_result, error = classify_single(cfg, item)
+                    if _raw_store is None:
+                        model_name, json_result, error = classify_single(cfg, item)
+                    else:
+                        _rec = _new_recorder()
+                        model_name, json_result, error = classify_single(cfg, item, _rec)
+                        _raw_store.put_recorder(idx, model_name, _rec, json_result, error)
                     model_results[model_name] = (json_result, error)
                     completed_calls[0] += 1
 
@@ -3571,10 +3609,20 @@ Categorize text responses {cove_categorize}:
             successes_this_round = 0
             if parallel:
                 with ThreadPoolExecutor(max_workers=effective_workers) as executor:
-                    futures = {
-                        executor.submit(classify_single, cfg, all_results[row_idx]["_original_item"]): (row_idx, cfg)
-                        for row_idx, cfg in failed_pairs
-                    }
+                    if _raw_store is None:
+                        futures = {
+                            executor.submit(classify_single, cfg, all_results[row_idx]["_original_item"]): (row_idx, cfg)
+                            for row_idx, cfg in failed_pairs
+                        }
+                    else:
+                        _recs = {(row_idx, cfg["sanitized_name"]): _new_recorder() for row_idx, cfg in failed_pairs}
+                        futures = {
+                            executor.submit(
+                                classify_single, cfg, all_results[row_idx]["_original_item"],
+                                _recs[(row_idx, cfg["sanitized_name"])],
+                            ): (row_idx, cfg)
+                            for row_idx, cfg in failed_pairs
+                        }
 
                     for future in as_completed(futures):
                         row_idx, cfg = futures[future]
@@ -3582,6 +3630,11 @@ Categorize text responses {cove_categorize}:
 
                         # Update the result in place
                         all_results[row_idx]["model_results"][model_name] = (json_result, error)
+                        if _raw_store is not None:
+                            _raw_store.put_recorder(
+                                row_idx, model_name, _recs[(row_idx, cfg["sanitized_name"])],
+                                json_result, error,
+                            )
 
                         if error is None:
                             # Verify JSON is valid and has correct schema
@@ -3598,7 +3651,12 @@ Categorize text responses {cove_categorize}:
                                 pass
             else:
                 for row_idx, cfg in failed_pairs:
-                    model_name, json_result, error = classify_single(cfg, all_results[row_idx]["_original_item"])
+                    if _raw_store is None:
+                        model_name, json_result, error = classify_single(cfg, all_results[row_idx]["_original_item"])
+                    else:
+                        _rec = _new_recorder()
+                        model_name, json_result, error = classify_single(cfg, all_results[row_idx]["_original_item"], _rec)
+                        _raw_store.put_recorder(row_idx, model_name, _rec, json_result, error)
                     all_results[row_idx]["model_results"][model_name] = (json_result, error)
                     if error is None:
                         try:
@@ -3684,12 +3742,21 @@ Categorize text responses {cove_categorize}:
 
     # Build output DataFrames
     print("Building output DataFrames...")
+    if _raw_store is None:
+        return build_output_dataframes(
+            all_results,
+            model_configs,
+            categories,
+            filename,
+            save_directory,
+        )
     return build_output_dataframes(
         all_results,
         model_configs,
         categories,
         filename,
         save_directory,
+        raw_capture=_raw_store,
     )
 
 
@@ -3699,6 +3766,7 @@ def build_output_dataframes(
     categories: list,
     filename: str,
     save_directory: str,
+    raw_capture=None,
 ) -> dict:
     """
     Build the output DataFrames from classification results.
@@ -3887,6 +3955,10 @@ def build_output_dataframes(
                 rename_map[col] = new_name
         simplified_df = simplified_df.rename(columns=rename_map)
 
+        if raw_capture is not None:
+            from ._raw_capture import attach_raw_columns
+            attach_raw_columns(simplified_df, raw_capture, model_names)
+
         if filename:
             save_path = filename
             if save_directory:
@@ -3896,6 +3968,10 @@ def build_output_dataframes(
             print(f"\nCombined results saved to {save_path}")
 
         return simplified_df
+
+    if raw_capture is not None:
+        from ._raw_capture import attach_raw_columns
+        attach_raw_columns(combined_df, raw_capture, model_names)
 
     # Multi-model: save the full combined DataFrame
     if filename:

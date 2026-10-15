@@ -67,6 +67,8 @@ def run_chunked_classification(
     prepare_image_data_fn=None,
     build_cove_prompts_fn=None,
     run_cove_fn=None,
+    # test=True only: a _raw_capture.RawReplyRecorder; marks chunk boundaries
+    raw_recorder=None,
 ):
     """
     Run chunked classification for one item across category chunks.
@@ -127,6 +129,9 @@ def run_chunked_classification(
 Categorize text responses {cove_categorize}:
 {chunk_categories_str}
 {cove_json}"""
+
+        if raw_recorder is not None:
+            raw_recorder.start_chunk(total=len(chunks))
 
         # Run one LLM call for this chunk (with "Other" included)
         chunk_result, chunk_error = _run_single_chunk_call(

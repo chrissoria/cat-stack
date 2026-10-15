@@ -196,6 +196,10 @@ def classify(
     tune_iterations: int = 3,
     tune_ui: str = "browser",
     tune_optimize: str = "balanced",
+    # Diagnostic switch, intentionally undocumented: True adds raw_reply /
+    # raw_attempts / parsed_json / raw_error columns (per model) so a row's
+    # parsed 0/1 values can be traced to what the model actually replied.
+    test: bool = False,
 ):
     """
     Unified classification function for text, image, and PDF inputs.
@@ -1040,6 +1044,7 @@ def classify(
                 batch_poll_interval=batch_poll_interval,
                 batch_timeout=batch_timeout,
                 fail_strategy=fail_strategy,
+                **({"test": True} if test else {}),
             )
             return _maybe_apply_embeddings(result)
 
@@ -1078,6 +1083,7 @@ def classify(
             save_directory=save_directory,
             batch_poll_interval=batch_poll_interval,
             batch_timeout=batch_timeout,
+            **({"test": True} if test else {}),
         )
         return _maybe_apply_embeddings(result)
 
@@ -1127,5 +1133,6 @@ def classify(
         embedding_tiebreaker_state=_embedding_tiebreaker_state,
         input_mode=input_mode,
         system_prompt=system_prompt,
+        **({"test": True} if test else {}),
     )
     return _maybe_apply_embeddings(result)
