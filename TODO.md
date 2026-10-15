@@ -21,6 +21,40 @@ most rows did not: that instability is information the matrix discards.
 - Output shape: `prob_N` columns beside `category_N`, cut at 0.5 for the
   matrix, so existing users see no change.
 
+## Feature: category-order ensemble
+
+Added 2026-10-14. One way to get the per-cell confidence above from any
+model.
+
+Classify each row k times (say 5) with the same model, presenting the
+categories in a different order each time, map every reply back to the
+original numbering, and vote. A category coded in all 5 orders is high
+confidence; one coded in 2 of 5 is a coin flip that depends on where it sat in
+the list. Unlike repeated sampling at a temperature, the prompt itself varies
+systematically, so agreement measures robustness to category order, a known
+source of drift (the JSSAM round-2 check that reversed the categories moved
+alpha on Gemini 2.5 Flash).
+
+Sketch:
+- Argument such as `category_orders=5` (default 1, no change). Orders from a
+  seed; cyclic shifts or a Latin square so each category visits each position
+  about equally, with the original order always one of them.
+- Renumber per order: the model's keys refer to the numbers it was shown, so
+  each reply is remapped to the original category numbers before voting. The
+  parser (classification_codes) runs per reply, as now.
+- Treat each order as an ensemble member and reuse the existing voting:
+  `consensus_threshold`, the per-category `agreement` scores and the
+  per-model columns. Output `prob_N` = share of orders coding category N
+  beside the voted `category_N`.
+- Cost is k times one run; on batch providers all k orders go into one batch
+  (half price), and replies stay schema-enforced.
+- Diagnostics for free: is a category coded more often when it is listed
+  early (position bias), and does order-instability concentrate on the cells
+  where models disagree with human coders?
+- Open questions: does k = 3 capture most of the signal; how it combines
+  with a multi-model ensemble (orders x models); single-label mode (vote over
+  the chosen category).
+
 ## Ponder: where in the text each code came from
 
 Added 2026-10-14. An open question, not a plan.
