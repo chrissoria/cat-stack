@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-10-20
+
+### Added
+- **`classify(prompt_style=...)`: the wording of the text-classification
+  prompt.** `"current"` (the default, unchanged) is cat-stack's domain-neutral
+  template: `Context: {description}.` and `Categorize this text response ...`.
+  `"catllm_0.0.97"` is the survey template of cat-llm 0.0.97, the version
+  behind the JSSAM survey-coding results:
+
+      A respondent was asked: {description}.
+      Categorize this survey response "{response}" into the following categories that apply:
+      1. ...
+      Provide your work in JSON format where the number belonging to each category is the key and a 1 if the category is present and a 0 if it is not present as key values.
+
+  It keeps cat-stack's line breaks and drops 0.0.97's stray indentation (an
+  artifact of backslash line continuations). With `chain_of_thought=True` it
+  uses 0.0.97's reasoning-then-answer JSON line; single-label prompts keep the
+  current instruction with the survey noun. The style reaches every text path:
+  synchronous, batch (and its synchronous fallback), `categories_per_call`, and
+  the chain-of-verification task text. An unknown style raises `ValueError`
+  before any API call. `PROMPT_STYLES`, `build_context_line()` and
+  `check_prompt_style()` live in `text_functions_ensemble`.
+- cat-survey 0.4.0 passes `prompt_style="catllm_0.0.97"` by default; the other
+  domain packages keep `"current"`.
+
 ## [2.6.6] - 2026-10-14
 
 ### Fixed

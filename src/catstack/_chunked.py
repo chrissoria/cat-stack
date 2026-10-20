@@ -119,14 +119,20 @@ def run_chunked_classification(
         # Rebuild CoVe task for this chunk if CoVe enabled
         chunk_cove_task = ""
         if chain_of_verification:
+            # the prompt style rides on build_text_prompt_fn (a functools.partial)
+            legacy = getattr(build_text_prompt_fn, "keywords", {}).get("prompt_style") == "catllm_0.0.97"
             if multi_label:
                 cove_categorize = "into the following categories"
                 cove_json = 'Provide your answer in JSON format where the category number is the key and "1" if present, "0" if not.'
+                if legacy:
+                    from .text_functions_ensemble import _LEGACY_JSON_LINE
+                    cove_json = _LEGACY_JSON_LINE
             else:
                 cove_categorize = "into the single most appropriate category"
                 cove_json = 'Provide your answer in JSON format where the category number is the key. Assign "1" to the single best matching category and "0" to all others.'
+            cove_noun = "survey responses" if legacy else "text responses"
             chunk_cove_task = f"""{survey_question_context}
-Categorize text responses {cove_categorize}:
+Categorize {cove_noun} {cove_categorize}:
 {chunk_categories_str}
 {cove_json}"""
 

@@ -41,6 +41,7 @@ Note: CoVe requires ~4x API calls per response. Not recommended for ensemble mod
 
 __all__ = ["classify_ensemble", "multi_class_ensemble", "summarize_ensemble"]
 
+import functools
 import json
 import os
 import re
@@ -1231,6 +1232,48 @@ def run_chain_of_verification(
 # Text-Specific Functions (swap these for image classification)
 # =============================================================================
 
+# Prompt wording for text classification. "current" is cat-stack's
+# domain-neutral template ("Context: ..." / "text response"). "catllm_0.0.97"
+# is the survey template of cat-llm 0.0.97, the version behind the JSSAM
+# survey-coding results, with that version's JSON line; it drops 0.0.97's
+# stray indentation (an artifact of backslash line continuations) and keeps
+# cat-stack's line breaks. cat-survey uses "catllm_0.0.97" by default.
+PROMPT_STYLES = ("current", "catllm_0.0.97")
+_LEGACY_JSON_LINE = (
+    "Provide your work in JSON format where the number belonging to each "
+    "category is the key and a 1 if the category is present and a 0 if it is "
+    "not present as key values."
+)
+_LEGACY_COT_JSON_LINE = (
+    "Provide your reasoning for each category, then provide your final answer "
+    "in JSON format where the number belonging to each category is the key and "
+    "a 1 if the category is present and a 0 if it is not present as key values."
+)
+
+
+def check_prompt_style(prompt_style: str) -> str:
+    """Return prompt_style if known, else raise ValueError."""
+    if prompt_style not in PROMPT_STYLES:
+        raise ValueError(
+            f"prompt_style must be one of {PROMPT_STYLES}, got {prompt_style!r}"
+        )
+    return prompt_style
+
+
+def build_context_line(survey_question: str, prompt_style: str = "current") -> str:
+    """The line that opens the classification prompt.
+
+    "current":       'Context: {survey_question}.'
+    "catllm_0.0.97": 'A respondent was asked: {survey_question}.'
+    Empty when survey_question is empty.
+    """
+    if not survey_question:
+        return ""
+    if check_prompt_style(prompt_style) == "catllm_0.0.97":
+        return f"A respondent was asked: {survey_question}."
+    return f"Context: {survey_question}."
+
+
 def build_text_classification_prompt(
     response_text: str,
     categories_str: str,
@@ -1243,6 +1286,7 @@ def build_text_classification_prompt(
     model_name: str = None,
     multi_label: bool = True,
     system_prompt: str = "",
+    prompt_style: str = "current",
 ) -> list:
     """
     Build the classification prompt for a text response.
@@ -1262,10 +1306,16 @@ def build_text_classification_prompt(
         model_name: Current model name (for step-back lookup)
         system_prompt: Custom system-level instruction to prepend (e.g. from
             prompt_tune()). Takes precedence over context_prompt when provided.
+        prompt_style: "current" or "catllm_0.0.97" (see PROMPT_STYLES). The
+            legacy style says "survey response" and uses 0.0.97's JSON line;
+            survey_question_context should come from build_context_line()
+            with the same style.
 
     Returns:
         List of message dicts for the LLM
     """
+    legacy = check_prompt_style(prompt_style) == "catllm_0.0.97"
+    response_noun = "survey response" if legacy else "text response"
     if multi_label:
         categorize_instruction = 'into the following categories that apply'
         json_instruction = 'Provide your answer in JSON format where the category number is the key and "1" if present, "0" if not.'
@@ -1274,11 +1324,13 @@ def build_text_classification_prompt(
         categorize_instruction = 'into the single most appropriate category'
         json_instruction = 'Provide your answer in JSON format where the category number is the key. Assign "1" to the single best matching category and "0" to all others.'
         cot_step3 = 'assign 1 to the single best matching category and 0 to all others'
+    if legacy and multi_label:
+        json_instruction = _LEGACY_COT_JSON_LINE if chain_of_thought else _LEGACY_JSON_LINE
 
     if chain_of_thought:
         user_prompt = f"""{survey_question_context}
 
-Categorize this text response "{response_text}" {categorize_instruction}:
+Categorize this {response_noun} "{response_text}" {categorize_instruction}:
 {categories_str}
 
 Let's think step by step:
@@ -1291,7 +1343,7 @@ Let's think step by step:
 {json_instruction}"""
     else:
         user_prompt = f"""{survey_question_context}
-Categorize this text response "{response_text}" {categorize_instruction}:
+Categorize this {response_noun} "{response_text}" {categorize_instruction}:
 {categories_str}
 {examples_text}
 {json_instruction}"""
@@ -2515,6 +2567,8 @@ def classify_ensemble(
     input_type: str = "auto",
     # Custom system prompt (e.g. from prompt_tune())
     system_prompt: str = "",
+    # Prompt wording: "current" or "catllm_0.0.97" (see PROMPT_STYLES)
+    prompt_style: str = "current",
     # Diagnostic: keep each model's raw reply per row (see _raw_capture.py)
     test: bool = False,
 ):
@@ -2861,7 +2915,8 @@ def classify_ensemble(
         f"Example {i}: {ex}" for i, ex in enumerate(examples, 1) if ex is not None
     )
 
-    survey_question_context = f"Context: {survey_question}." if survey_question else ""
+    check_prompt_style(prompt_style)
+    survey_question_context = build_context_line(survey_question, prompt_style)
 
     # Print categories
     print(f"\nCategories to classify ({len(categories)} total):")
@@ -2892,11 +2947,14 @@ def classify_ensemble(
         if multi_label:
             cove_categorize = "into the following categories"
             cove_json = 'Provide your answer in JSON format where the category number is the key and "1" if present, "0" if not.'
+            if prompt_style == "catllm_0.0.97":
+                cove_json = _LEGACY_JSON_LINE
         else:
             cove_categorize = "into the single most appropriate category"
             cove_json = 'Provide your answer in JSON format where the category number is the key. Assign "1" to the single best matching category and "0" to all others.'
+        cove_noun = "survey responses" if prompt_style == "catllm_0.0.97" else "text responses"
         cove_original_task = f"""{survey_question_context}
-Categorize text responses {cove_categorize}:
+Categorize {cove_noun} {cove_categorize}:
 {categories_str}
 {cove_json}"""
 
@@ -3091,7 +3149,8 @@ Categorize text responses {cove_categorize}:
                     pdf_mode=pdf_mode,
                     pdf_dpi=pdf_dpi,
                     input_description=input_description,
-                    build_text_prompt_fn=build_text_classification_prompt,
+                    build_text_prompt_fn=functools.partial(
+                        build_text_classification_prompt, prompt_style=prompt_style),
                     build_pdf_prompt_fn=build_pdf_classification_prompt,
                     build_image_prompt_fn=build_image_classification_prompt,
                     google_multimodal_fn=_google_mm,
@@ -3287,6 +3346,7 @@ Categorize text responses {cove_categorize}:
                         model_name=cfg["model"],
                         multi_label=multi_label,
                         system_prompt=system_prompt,
+                        prompt_style=prompt_style,
                     )
 
                     json_result = '{"1":"e"}'

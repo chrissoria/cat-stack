@@ -33,6 +33,8 @@ from ._category_analysis import has_other_category, check_category_verbosity
 # Import the implementation functions from existing modules
 from .text_functions_ensemble import (
     classify_ensemble,
+    build_context_line,
+    check_prompt_style,
 )
 
 # Import deprecated functions for backward compatibility
@@ -192,6 +194,7 @@ def classify(
     categories_per_call: int = None,
     pilot_test: Union[bool, int] = False,
     system_prompt: str = "",
+    prompt_style: str = "current",
     prompt_tune: Union[bool, int] = False,
     tune_iterations: int = 3,
     tune_ui: str = "browser",
@@ -413,6 +416,13 @@ def classify(
             classification prompt. Use prompt_tune() to generate an optimized
             instruction from labeled examples. Takes precedence over
             context_prompt when provided. Default "".
+        prompt_style (str): Wording of the text-classification prompt.
+            - "current" (default): 'Context: {description}.' and
+              'Categorize this text response ...'.
+            - "catllm_0.0.97": the survey template of cat-llm 0.0.97,
+              'A respondent was asked: {description}.' and 'Categorize this
+              survey response ...', with that version's JSON instruction.
+              cat-survey passes this by default.
         prompt_tune (bool or int): Run automatic prompt optimization before the
             full classification. Classifies a small sample, opens a browser UI
             for corrections, then generates an optimized system_prompt.
@@ -457,6 +467,7 @@ def classify(
     description, survey_question = _resolve_description_context(
         description, survey_question, "classify"
     )
+    check_prompt_style(prompt_style)
 
     # Build models list
     if models is None:
@@ -1003,7 +1014,7 @@ def classify(
 
         # Build prompt components (mirrors what classify_ensemble does)
         categories_str = "\n".join(f"{i + 1}. {cat}" for i, cat in enumerate(categories))
-        survey_question_context = f"Context: {survey_question}." if survey_question else ""
+        survey_question_context = build_context_line(survey_question, prompt_style)
         examples = [example1, example2, example3, example4, example5, example6]
         examples_text = "\n".join(
             f"Example {i}: {ex}" for i, ex in enumerate(examples, 1) if ex is not None
@@ -1033,6 +1044,7 @@ def classify(
                 "creativity": cfg["creativity"] if cfg["creativity"] is not None else creativity,
                 "thinking_budget": thinking_budget,
                 "multi_label": multi_label,
+                "prompt_style": prompt_style,
             }
             result = run_batch_classify(
                 items=items,
@@ -1068,6 +1080,7 @@ def classify(
                 "json_schema": json_schemas[cfg["model"]],
                 "creativity": cfg["creativity"] if cfg["creativity"] is not None else creativity,
                 "thinking_budget": thinking_budget,
+                "prompt_style": prompt_style,
                 "multi_label": multi_label,
             }
             for cfg in model_configs
@@ -1133,6 +1146,7 @@ def classify(
         embedding_tiebreaker_state=_embedding_tiebreaker_state,
         input_mode=input_mode,
         system_prompt=system_prompt,
+        prompt_style=prompt_style,
         **({"test": True} if test else {}),
     )
     return _maybe_apply_embeddings(result)

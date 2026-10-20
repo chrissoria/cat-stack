@@ -807,6 +807,7 @@ def _run_one_batch_job(
     json_schema = prompt_params.get("json_schema")
     creativity = prompt_params.get("creativity")
     thinking_budget = prompt_params.get("thinking_budget", 0)
+    prompt_style = prompt_params.get("prompt_style", "current")
 
     client = UnifiedLLMClient(provider=provider, api_key=api_key, model=model)
 
@@ -833,6 +834,7 @@ def _run_one_batch_job(
             model_name=model,
             multi_label=prompt_params.get("multi_label", True),
             system_prompt=prompt_params.get("system_prompt", ""),
+            prompt_style=prompt_style,
         )
 
         # Pass thinking_budget through unchanged, including an explicit 0
@@ -949,6 +951,7 @@ def _run_one_sync_model(
             model_name=model,
             multi_label=prompt_params.get("multi_label", True),
             system_prompt=prompt_params.get("system_prompt", ""),
+            prompt_style=prompt_params.get("prompt_style", "current"),
         )
         try:
             # Pass thinking_budget through unchanged (including explicit 0 =
