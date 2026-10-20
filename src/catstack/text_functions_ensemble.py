@@ -1251,6 +1251,25 @@ _LEGACY_COT_JSON_LINE = (
 )
 
 
+def collect_examples(example1=None, example2=None, example3=None, example4=None,
+                     example5=None, example6=None, examples=None) -> list:
+    """Few-shot examples in prompt order: example1..example6 (those given),
+    then each item of `examples`. `examples` has no cap; a single string is
+    treated as one example."""
+    out = [ex for ex in (example1, example2, example3, example4, example5, example6)
+           if ex is not None]
+    if examples is not None:
+        if isinstance(examples, str):
+            examples = [examples]
+        out.extend(ex for ex in examples if ex is not None)
+    return out
+
+
+def format_examples_text(examples: list) -> str:
+    """'Example 1: ...' lines, the format example1..example6 always had."""
+    return "\n".join(f"Example {i}: {ex}" for i, ex in enumerate(examples, 1))
+
+
 def check_prompt_style(prompt_style: str) -> str:
     """Return prompt_style if known, else raise ValueError."""
     if prompt_style not in PROMPT_STYLES:
@@ -2521,6 +2540,7 @@ def classify_ensemble(
     example4: str = None,
     example5: str = None,
     example6: str = None,
+    examples: list = None,
     creativity: float = None,
     chain_of_thought: bool = False,
     chain_of_verification: bool = False,
@@ -2910,10 +2930,8 @@ def classify_ensemble(
     # Build shared prompt components
     categories_str = "\n".join(f"{i + 1}. {cat}" for i, cat in enumerate(categories))
 
-    examples = [example1, example2, example3, example4, example5, example6]
-    examples_text = "\n".join(
-        f"Example {i}: {ex}" for i, ex in enumerate(examples, 1) if ex is not None
-    )
+    examples_text = format_examples_text(collect_examples(
+        example1, example2, example3, example4, example5, example6, examples))
 
     check_prompt_style(prompt_style)
     survey_question_context = build_context_line(survey_question, prompt_style)

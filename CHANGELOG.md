@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-10-20
+
+### Added
+- **`classify(examples=[...])`: few-shot examples with no cap.** `example1`..
+  `example6` allowed at most six, too few to show each of 11-15 categories
+  once. `examples` takes a list (a single string counts as one), placed after
+  any `example1`..`example6` and numbered on from them as `Example N: ...`
+  lines, the format those parameters always had. Reaches the synchronous,
+  batch and `categories_per_call` paths and the pilot-test run.
+  `collect_examples()` and `format_examples_text()` live in
+  `text_functions_ensemble`. `example1`..`example6` are unchanged.
+
 ## [2.7.0] - 2026-10-20
 
 ### Added

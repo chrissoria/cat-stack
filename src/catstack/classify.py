@@ -35,6 +35,8 @@ from .text_functions_ensemble import (
     classify_ensemble,
     build_context_line,
     check_prompt_style,
+    collect_examples,
+    format_examples_text,
 )
 
 # Import deprecated functions for backward compatibility
@@ -154,6 +156,7 @@ def classify(
     example4=None,
     example5=None,
     example6=None,
+    examples=None,
     filename=None,
     save_directory=None,
     model_source="auto",
@@ -252,6 +255,9 @@ def classify(
             OpenAI / xAI: reasoning_effort, graded low/medium/high by budget
                 (<=2048 low, <=8192 medium, else high; 0=off-floor).
         example1-6 (str): Example categorizations for few-shot learning.
+        examples (list of str): Further few-shot examples, with no cap, placed
+            after example1-6 (a single string counts as one). Each becomes an
+            "Example N: ..." line in the prompt, numbered on from example1-6.
         filename (str): Output filename for CSV.
         save_directory (str): Directory to save results.
         model_source (str): Provider - "auto", "openai", "anthropic", "google",
@@ -589,6 +595,7 @@ def classify(
             example4=example4,
             example5=example5,
             example6=example6,
+            examples=examples,
             consensus_threshold=consensus_threshold,
             multi_label=multi_label,
             input_mode=input_mode,
@@ -683,8 +690,8 @@ def classify(
             "  recommended for improving classification accuracy."
         )
 
-    examples = [example1, example2, example3, example4, example5, example6]
-    n_examples = sum(1 for ex in examples if ex is not None)
+    n_examples = len(collect_examples(
+        example1, example2, example3, example4, example5, example6, examples))
     if n_examples > 0:
         _strategy_warnings.append(
             f"[CatLLM] NOTE: {n_examples} few-shot example(s) provided.\n"
@@ -1015,10 +1022,8 @@ def classify(
         # Build prompt components (mirrors what classify_ensemble does)
         categories_str = "\n".join(f"{i + 1}. {cat}" for i, cat in enumerate(categories))
         survey_question_context = build_context_line(survey_question, prompt_style)
-        examples = [example1, example2, example3, example4, example5, example6]
-        examples_text = "\n".join(
-            f"Example {i}: {ex}" for i, ex in enumerate(examples, 1) if ex is not None
-        )
+        examples_text = format_examples_text(collect_examples(
+            example1, example2, example3, example4, example5, example6, examples))
 
         model_configs = prepare_model_configs(models, auto_download=auto_download)
         json_schemas = prepare_json_schemas(model_configs, categories, use_json_schema)
@@ -1131,6 +1136,7 @@ def classify(
         example4=example4,
         example5=example5,
         example6=example6,
+        examples=examples,
         consensus_threshold=consensus_threshold,
         max_categories=max_categories,
         categories_per_chunk=categories_per_chunk,
