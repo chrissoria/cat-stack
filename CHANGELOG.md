@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.1] - 2026-10-20
+
+### Fixed
+- **Qwen3.8 Max (`Qwen/Qwen3.8-2.4T-A95B`) failed every row on its Hugging
+  Face host.** cat-stack sends `chat_template_kwargs.enable_thinking=False` to
+  Qwen3 models at `thinking_budget=0`; on novita this checkpoint returns a bare
+  400 ("invalid request error") that the strip-on-400 fallback does not
+  recognise, so each row was retried until it failed. It now gets no switch
+  and reasons at its default, with the once-per-model warning that no
+  reasoning control was delivered. No off switch works on the reachable hosts
+  (`enable_thinking` rejected; `reasoning_effort` none/minimal and
+  `reasoning.enabled=false` accepted but ignored: 75-95 reasoning tokens either
+  way; verified 2026-10-20). Other Qwen3 models keep the off switch.
+
 ## [2.8.0] - 2026-10-20
 
 ### Added

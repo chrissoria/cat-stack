@@ -157,7 +157,22 @@ _HF_NEEDS_ENABLE_THINKING_OFF = (
 )
 
 
+# Qwen3 checkpoints whose served template rejects `enable_thinking`. Qwen3.8
+# Max (2.4T-A95B) on novita returns a bare 400 ("invalid request error") for
+# chat_template_kwargs.enable_thinking, which the strip-on-400 net does not
+# recognise, so every row was retried until it failed; reasoning_effort
+# none/minimal and reasoning.enabled=false are accepted but ignored (75-95
+# reasoning tokens either way). Thinking cannot be turned off on any host
+# reachable here (verified 2026-10-20); send no switch and let it reason at
+# its default, as `_HF_DEFAULT_REASONING_PREFIXES` records.
+_HF_REJECTS_ENABLE_THINKING = (
+    "Qwen/Qwen3.8-2.4T-A95B",
+)
+
+
 def _hf_model_needs_enable_thinking_off(model: str) -> bool:
+    if any(model.startswith(p) for p in _HF_REJECTS_ENABLE_THINKING):
+        return False
     return any(model.startswith(p) for p in _HF_NEEDS_ENABLE_THINKING_OFF)
 
 
@@ -169,6 +184,7 @@ def _hf_model_needs_enable_thinking_off(model: str) -> bool:
 _HF_DEFAULT_REASONING_PREFIXES = (
     "openai/gpt-oss",
     "moonshotai/kimi-k2",
+    "qwen/qwen3.8-2.4t-a95b",   # see _HF_REJECTS_ENABLE_THINKING
 )
 
 
