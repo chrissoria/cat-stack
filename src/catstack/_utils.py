@@ -263,6 +263,27 @@ def classification_reply_is_usable(json_str: str, num_categories: int) -> bool:
     return classification_codes(json_str, num_categories) is not None
 
 
+def reply_parses_as_json(reply) -> bool:
+    """True when a raw model reply holds a JSON object that json.loads reads.
+
+    Gates the JSON formatter: it repairs replies whose JSON is broken or
+    missing (prose, markdown, a cut-off object), not replies the model wrote
+    as valid JSON without 0/1 codes. Given {"1": "NA", "2": "NA"}, the
+    formatter's prompt (all N categories, ambiguous -> "0") turns the
+    abstention into all zeros, a vote that blocks every "1" in a unanimous
+    ensemble. Left unformatted, the model counts as failed for that row.
+    """
+    if not isinstance(reply, str):
+        return False
+    extracted = _extract_balanced_json(reply)
+    if extracted is None:
+        return False
+    try:
+        return isinstance(json.loads(extracted), dict)
+    except json.JSONDecodeError:
+        return False
+
+
 def validate_classification_json(json_str: str, num_categories: int) -> tuple[bool, dict | None]:
     """
     Validate that a JSON string contains valid classification output.

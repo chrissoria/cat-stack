@@ -2995,8 +2995,12 @@ Categorize {cove_noun} {cove_categorize}:
         n = len(cats)
         # The formatter runs only on replies the aggregator cannot use, not
         # on usable sparse ones.
-        from ._utils import classification_reply_is_usable
+        from ._utils import classification_reply_is_usable, reply_parses_as_json
         if classification_reply_is_usable(json_result, n):
+            return json_result
+        # Valid JSON without usable codes (e.g. all "NA") stays a failure;
+        # the formatter would fill it with zeros. See reply_parses_as_json().
+        if reply_parses_as_json(raw_reply):
             return json_result
 
         # Fast skip — once consent has been declined for this run, every

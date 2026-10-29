@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The JSON formatter turned abstentions into all-zero votes.** A model
+  reply that is valid JSON with no 0/1 codes (e.g. `{"1": "NA", "2": "NA"}`)
+  reached the formatter on its last JSON retry, and the formatter's prompt
+  (code all N categories, default ambiguous ones to `"0"`) answered all
+  zeros. That counted as a real vote: in a `consensus_threshold="unanimous"`
+  ensemble it blocked a `1` in every category for the row. The formatter now
+  runs only when the raw reply does not parse as a JSON object (prose,
+  markdown, cut-off JSON). A reply that parses but has no usable codes stays
+  a failed model for that row, left out of the vote under
+  `fail_strategy="partial"` and re-asked by `batch_retries`. Parseable replies
+  with misnamed keys (`"category_2"`) are no longer rescued by the formatter
+  either. New `_utils.reply_parses_as_json()`.
+
 ## [2.8.1] - 2026-10-20
 
 ### Fixed
