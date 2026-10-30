@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.2] - 2026-10-30
+
 ### Fixed
 - **The JSON formatter turned abstentions into all-zero votes.** A model
   reply that is valid JSON with no 0/1 codes (e.g. `{"1": "NA", "2": "NA"}`)
