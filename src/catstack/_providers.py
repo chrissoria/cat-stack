@@ -129,6 +129,10 @@ def _openai_reasoning_effort_floor(model: str) -> str:
     """Return the off-equivalent reasoning_effort value for a reasoning-
     capable OpenAI model, based on its name prefix. Defaults to "minimal"
     for models not covered by the table — the safest historical value."""
+    # GPT-5.2 rejects "minimal" (verified live 2026-10-30). Base model and its
+    # dated snapshots only; gpt-5.2-pro and the -chat-latest alias are untested.
+    if model == "gpt-5.2" or model.startswith("gpt-5.2-2025"):
+        return "none"
     for prefix, floor in _OPENAI_REASONING_EFFORT_FLOORS:
         if model.startswith(prefix):
             return floor
