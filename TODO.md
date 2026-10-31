@@ -55,6 +55,39 @@ Sketch:
   with a multi-model ensemble (orders x models); single-label mode (vote over
   the chosen category).
 
+## Experiment: do self-reported confidence scores beat 0/1 codes?
+
+Added 2026-10-29. A research question, not a feature yet.
+
+Token logprobs exist on some providers only (OpenAI, Gemini, Ollama; not
+Anthropic), so the one confidence signal every model can give is a score it
+writes itself. With `categories_per_call=1`, ask for a 1-10 score per category
+in place of the 0/1 code, and test it against human codes.
+
+- Questions: (1) does the score predict the human code; (2) does it drop where
+  human coders disagree (needs 2+ coders per item); (3) does it add anything
+  beyond the ensemble's agreement, which is already free.
+- Main metric: Brier score against the human code. The bar is hard: for a
+  0/1 prediction the Brier score equals the error rate, so a score (rescaled
+  to 0-1) has to beat plain 0/1 coding's error rate to be worth asking for.
+  Other contenders on the same items: the share of ensemble models voting 1,
+  and token logprobs where a provider has them. Report the Brier
+  decomposition (calibration vs. resolution) and AUC beside it.
+- Conditions: the validated all-categories 0/1 prompt (the baseline);
+  `categories_per_call=1` with 0/1 (separates one-category-per-call from
+  asking for a score); `categories_per_call=1` with a 1-10 score, cut per
+  model at a threshold fit on a held-out half.
+- Watch for: scores bunching at 7-9 (report each model's distribution; it is
+  a finding in itself), scores that differ in meaning across models
+  (calibrate per model before pooling), thinking left on (pushes confidence
+  to the extremes), and the score request changing the 0/1 decisions.
+- Prior work to place it against: Tian et al. 2023 ("Just Ask for
+  Calibration") and Xiong et al. 2024 (ICLR), on how calibrated LLMs'
+  self-reported confidence is. The gap is content-analysis coding judged
+  against human disagreement, across providers.
+- Conflicts with the category-order ensemble above: with one category per
+  call there is no order to vary.
+
 ## Ponder: where in the text each code came from
 
 Added 2026-10-14. An open question, not a plan.
