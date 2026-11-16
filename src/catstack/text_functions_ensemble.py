@@ -2589,6 +2589,8 @@ def classify_ensemble(
     system_prompt: str = "",
     # Prompt wording: "current" or "catllm_0.0.97" (see PROMPT_STYLES)
     prompt_style: str = "current",
+    # Saturation prompting: every wording variant per response (see _saturation.py)
+    saturation: bool = False,
     # Diagnostic: keep each model's raw reply per row (see _raw_capture.py)
     test: bool = False,
 ):
@@ -2630,6 +2632,11 @@ def classify_ensemble(
         chain_of_thought: If True, uses step-by-step reasoning in prompt
         chain_of_verification: If True, uses 4-step verification to improve accuracy
             (Note: ~4x API calls per response - expensive for ensemble mode)
+        saturation: If True, classifies each text response once per prompt-wording
+            variant (catstack.prompts.saturation_prompts, v01-v10) at temperature 0
+            and takes the majority (see _saturation.py). 10 calls per response per
+            model. Each category cell then holds the proportion of usable draws that
+            assigned it, and saturation_draws the number of usable draws.
         step_back_prompt: If True, first asks about underlying factors before classifying
         context_prompt: If True, adds expert context prefix to prompts
         thinking_budget: Token budget for Google's extended thinking (0 to disable)
@@ -3085,8 +3092,14 @@ Categorize {cove_noun} {cove_categorize}:
     def _new_recorder():
         return RawReplyRecorder() if _raw_store is not None else None
 
+    # saturation=True: draws and proportions per (row index, model), from classify_single.
+    _saturation_stats = {}
+    _saturation_lock = threading.Lock()
+    if saturation:
+        from ._saturation import run_saturation
+
     # Classification function for single model + single item (text, PDF page, or image)
-    def classify_single(cfg: dict, item, _recorder=None) -> tuple:
+    def classify_single(cfg: dict, item, _recorder=None, _row=None) -> tuple:
         """
         Classify one item (text response, PDF page, or image) with one model.
 
@@ -3322,7 +3335,30 @@ Categorize {cove_noun} {cove_categorize}:
             else:
                 response_text = item
 
-                if cfg["use_two_step"]:  # Ollama (or two_step_classify=True)
+                if saturation:
+                    # One call per wording variant, majority across them (_saturation.py)
+                    json_result, error, _sat = run_saturation(
+                        client=client,
+                        response_text=response_text,
+                        categories_str=categories_str,
+                        n_cats=len(categories),
+                        survey_question=survey_question,
+                        examples_text=examples_text,
+                        multi_label=multi_label,
+                        system_prompt=system_prompt,
+                        json_schema=json_schemas[cfg["model"]],
+                        provider=cfg["provider"],
+                        thinking_budget=thinking_budget,
+                        max_retries=max_retries,
+                        json_retries=json_retries,
+                        extract_json_fn=extract_json,
+                        formatter_fallback_fn=_try_formatter_fallback,
+                        retry_delay=retry_delay,
+                    )
+                    if _row is not None:
+                        with _saturation_lock:
+                            _saturation_stats[(_row, cfg["sanitized_name"])] = _sat
+                elif cfg["use_two_step"]:  # Ollama (or two_step_classify=True)
                     json_result, step1_raw, error = ollama_two_step_classify(
                         client=client,
                         response_text=response_text,
@@ -3547,13 +3583,13 @@ Categorize {cove_noun} {cove_categorize}:
                 with ThreadPoolExecutor(max_workers=effective_workers) as executor:
                     if _raw_store is None:
                         futures = {
-                            executor.submit(classify_single, cfg, item): cfg["sanitized_name"]
+                            executor.submit(classify_single, cfg, item, _row=idx): cfg["sanitized_name"]
                             for cfg in model_configs
                         }
                     else:
                         _recs = {cfg["sanitized_name"]: _new_recorder() for cfg in model_configs}
                         futures = {
-                            executor.submit(classify_single, cfg, item, _recs[cfg["sanitized_name"]]): cfg["sanitized_name"]
+                            executor.submit(classify_single, cfg, item, _recs[cfg["sanitized_name"]], _row=idx): cfg["sanitized_name"]
                             for cfg in model_configs
                         }
 
@@ -3568,10 +3604,10 @@ Categorize {cove_noun} {cove_categorize}:
             else:
                 for cfg in model_configs:
                     if _raw_store is None:
-                        model_name, json_result, error = classify_single(cfg, item)
+                        model_name, json_result, error = classify_single(cfg, item, _row=idx)
                     else:
                         _rec = _new_recorder()
-                        model_name, json_result, error = classify_single(cfg, item, _rec)
+                        model_name, json_result, error = classify_single(cfg, item, _rec, _row=idx)
                         _raw_store.put_recorder(idx, model_name, _rec, json_result, error)
                     model_results[model_name] = (json_result, error)
                     completed_calls[0] += 1
@@ -3671,7 +3707,7 @@ Categorize {cove_noun} {cove_categorize}:
                 with ThreadPoolExecutor(max_workers=effective_workers) as executor:
                     if _raw_store is None:
                         futures = {
-                            executor.submit(classify_single, cfg, all_results[row_idx]["_original_item"]): (row_idx, cfg)
+                            executor.submit(classify_single, cfg, all_results[row_idx]["_original_item"], _row=row_idx): (row_idx, cfg)
                             for row_idx, cfg in failed_pairs
                         }
                     else:
@@ -3679,7 +3715,7 @@ Categorize {cove_noun} {cove_categorize}:
                         futures = {
                             executor.submit(
                                 classify_single, cfg, all_results[row_idx]["_original_item"],
-                                _recs[(row_idx, cfg["sanitized_name"])],
+                                _recs[(row_idx, cfg["sanitized_name"])], _row=row_idx,
                             ): (row_idx, cfg)
                             for row_idx, cfg in failed_pairs
                         }
@@ -3703,10 +3739,10 @@ Categorize {cove_noun} {cove_categorize}:
             else:
                 for row_idx, cfg in failed_pairs:
                     if _raw_store is None:
-                        model_name, json_result, error = classify_single(cfg, all_results[row_idx]["_original_item"])
+                        model_name, json_result, error = classify_single(cfg, all_results[row_idx]["_original_item"], _row=row_idx)
                     else:
                         _rec = _new_recorder()
-                        model_name, json_result, error = classify_single(cfg, all_results[row_idx]["_original_item"], _rec)
+                        model_name, json_result, error = classify_single(cfg, all_results[row_idx]["_original_item"], _rec, _row=row_idx)
                         _raw_store.put_recorder(row_idx, model_name, _rec, json_result, error)
                     all_results[row_idx]["model_results"][model_name] = (json_result, error)
                     if error is None:
@@ -3784,6 +3820,7 @@ Categorize {cove_noun} {cove_categorize}:
 
     # Build output DataFrames
     print("Building output DataFrames...")
+    _sat_kwargs = {"saturation_stats": _saturation_stats} if saturation else {}
     if _raw_store is None:
         return build_output_dataframes(
             all_results,
@@ -3791,6 +3828,7 @@ Categorize {cove_noun} {cove_categorize}:
             categories,
             filename,
             save_directory,
+            **_sat_kwargs,
         )
     return build_output_dataframes(
         all_results,
@@ -3799,6 +3837,7 @@ Categorize {cove_noun} {cove_categorize}:
         filename,
         save_directory,
         raw_capture=_raw_store,
+        **_sat_kwargs,
     )
 
 
@@ -3809,9 +3848,13 @@ def build_output_dataframes(
     filename: str,
     save_directory: str,
     raw_capture=None,
+    saturation_stats=None,
 ) -> dict:
     """
     Build the output DataFrames from classification results.
+
+    With saturation_stats (classify(saturation=True)), each category cell holds the
+    proportion of usable draws that assigned the category; see _saturation.py.
 
     Returns:
         Dict with "combined", "consensus", and per-model DataFrames
@@ -3950,6 +3993,11 @@ def build_output_dataframes(
     for col in cat_cols:
         combined_df[col] = pd.to_numeric(combined_df[col], errors='coerce').astype('Int64')
 
+    # Saturation: cells become proportions of draws (mean assignment rate)
+    if saturation_stats is not None:
+        from ._saturation import apply_saturation_proportions
+        apply_saturation_proportions(combined_df, saturation_stats, model_names, num_categories)
+
     # Create consensus-only DataFrame
     consensus_cols = ["input_data", "processing_status", "failed_models"]
     # Add PDF columns if present
@@ -3992,7 +4040,7 @@ def build_output_dataframes(
         # Rename category columns to remove model suffix: category_1_model_name -> category_1
         rename_map = {}
         for col in simplified_df.columns:
-            if col.startswith("category_") and f"_{model_name}" in col:
+            if col.startswith(("category_", "saturation_")) and f"_{model_name}" in col:
                 new_name = col.replace(f"_{model_name}", "")
                 rename_map[col] = new_name
         simplified_df = simplified_df.rename(columns=rename_map)

@@ -1,0 +1,9 @@
+{
+  "id": "v01",
+  "note": "cat-llm 0.0.97's survey prompt, verbatim (cat-stack prompt_style=\"catllm_0.0.97\")",
+  "context": "A respondent was asked: {question}.",
+  "categorize": "Categorize this survey response \"{response_text}\" into the following categories that apply:",
+  "categorize_single": "Categorize this survey response \"{response_text}\" into the single most appropriate category:",
+  "json": "Provide your work in JSON format where the number belonging to each category is the key and a 1 if the category is present and a 0 if it is not present as key values.",
+  "json_single": "Provide your answer in JSON format where the category number is the key. Assign \"1\" to the single best matching category and \"0\" to all others."
+}

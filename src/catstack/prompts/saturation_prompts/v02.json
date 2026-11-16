@@ -1,0 +1,9 @@
+{
+  "id": "v02",
+  "note": "wording variant of v01; substance and answer contract unchanged",
+  "context": "A survey respondent was asked: {question}.",
+  "categorize": "Classify this survey response \"{response_text}\" into the following categories that apply:",
+  "categorize_single": "Classify this survey response \"{response_text}\" into the single most appropriate category:",
+  "json": "Provide your answer in JSON format where the number of each category is the key and the value is 1 if the category is present and 0 if it is not present.",
+  "json_single": "Provide your answer in JSON format where the number of each category is the key. Give \"1\" to the single best matching category and \"0\" to all of the others."
+}

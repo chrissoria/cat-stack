@@ -83,6 +83,7 @@ def _maybe_print_batch_nudge(
     chain_of_verification,
     embedding_tiebreaker,
     progress_callback,
+    saturation=False,
 ):
     """Print a one-line cost tip when a synchronous run qualifies for
     batch_mode=True. Checks the same eligibility rules the batch path
@@ -91,6 +92,7 @@ def _maybe_print_batch_nudge(
     if (
         categories_per_call is not None
         or chain_of_verification
+        or saturation
         or embedding_tiebreaker
         or progress_callback is not None
     ):
@@ -198,6 +200,7 @@ def classify(
     pilot_test: Union[bool, int] = False,
     system_prompt: str = "",
     prompt_style: str = "current",
+    saturation: bool = False,
     prompt_tune: Union[bool, int] = False,
     tune_iterations: int = 3,
     tune_ui: str = "browser",
@@ -243,6 +246,15 @@ def classify(
         safety (bool): If True, saves progress after each item.
         chain_of_verification (bool): Enable Chain of Verification for accuracy.
         chain_of_thought (bool): Enable step-by-step reasoning. Default False.
+        saturation (bool): Saturation prompting. Each text response is classified
+            once per prompt-wording variant (catstack.prompts.saturation_prompts,
+            v01-v10; v01 is cat-llm 0.0.97's survey prompt) at temperature 0, so
+            the draws differ only in wording. Each category cell then holds the
+            proportion of usable draws that assigned it (2 of 10 -> 0.2), and
+            saturation_draws gives the number of usable draws. 10 calls per
+            response per model. Text input only; not combinable with batch_mode,
+            chain_of_thought, chain_of_verification, step_back_prompt,
+            context_prompt, categories_per_call or two_step_classify. Default False.
         step_back_prompt (bool): Enable step-back prompting.
         context_prompt (bool): Add expert context to prompts.
         thinking_budget (int): A single token-count reasoning knob, translated
@@ -475,6 +487,32 @@ def classify(
     )
     check_prompt_style(prompt_style)
 
+    # =========================================================================
+    # Validate saturation
+    # =========================================================================
+    if saturation:
+        _sat_conflicts = [name for name, on in (
+            ("batch_mode", batch_mode),
+            ("chain_of_thought", chain_of_thought),
+            ("chain_of_verification", chain_of_verification),
+            ("step_back_prompt", step_back_prompt),
+            ("context_prompt", context_prompt),
+            ("categories_per_call", categories_per_call is not None),
+            ("two_step_classify", bool(two_step_classify)),
+        ) if on]
+        if _sat_conflicts:
+            raise ValueError(
+                "saturation=True can't be combined with " + ", ".join(_sat_conflicts)
+                + ". The saturation prompt variants cover the plain classification prompt only."
+            )
+        from .text_functions_ensemble import _detect_input_type as _sat_detect
+        _sat_type = _sat_detect(input_data)
+        if _sat_type in ("pdf", "image"):
+            raise ValueError(f"saturation=True supports text input only, got {_sat_type} input.")
+        if creativity not in (None, 0):
+            print(f"[CatLLM] saturation=True: draws use temperature 0; creativity={creativity} "
+                  "is not used.")
+
     # Build models list
     if models is None:
         # Single model mode - build models list from individual params
@@ -679,6 +717,14 @@ def classify(
     # =========================================================================
     _strategy_warnings = []
 
+    if saturation:
+        _strategy_warnings.append(
+            "[CatLLM] NOTE: saturation=True is enabled.\n"
+            "  Each response is classified once per prompt-wording variant (10 variants)\n"
+            "  at temperature 0. Each category cell holds the proportion of draws that\n"
+            "  assigned it (e.g. 0.2 = 2 of 10). Cost: 10x API calls per response."
+        )
+
     if chain_of_verification:
         _strategy_warnings.append(
             "[CatLLM] WARNING: chain_of_verification=True is enabled.\n"
@@ -752,6 +798,7 @@ def classify(
                 chain_of_verification=chain_of_verification,
                 embedding_tiebreaker=embedding_tiebreaker,
                 progress_callback=progress_callback,
+                saturation=saturation,
             )
         except Exception:
             pass
@@ -1153,6 +1200,7 @@ def classify(
         input_mode=input_mode,
         system_prompt=system_prompt,
         prompt_style=prompt_style,
+        saturation=saturation,
         **({"test": True} if test else {}),
     )
     return _maybe_apply_embeddings(result)

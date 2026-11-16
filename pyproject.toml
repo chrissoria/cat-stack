@@ -64,6 +64,7 @@ check = "mypy --install-types --non-interactive {args:src/catstack tests}"
 packages = ["src/catstack", "src/cat_stack"]
 include = [
     "src/catstack/**/*.py",
+    "src/catstack/prompts/**/*.json",
     "src/catstack/images/*",
     "src/cat_stack/__init__.py",
 ]
@@ -71,6 +72,7 @@ include = [
 [tool.hatch.build.targets.sdist]
 include = [
     "src/catstack/**/*.py",
+    "src/catstack/prompts/**/*.json",
     "src/catstack/images/*",
     "src/cat_stack/__init__.py",
 ]
