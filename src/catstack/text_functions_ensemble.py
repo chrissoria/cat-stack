@@ -2589,8 +2589,14 @@ def classify_ensemble(
     system_prompt: str = "",
     # Prompt wording: "current" or "catllm_0.0.97" (see PROMPT_STYLES)
     prompt_style: str = "current",
-    # Saturation prompting: every wording variant per response (see _saturation.py)
+    # Saturation prompting: every prompt in the grid per response (see _saturation.py)
     saturation: bool = False,
+    saturation_orders: int = 1,
+    saturation_variants=None,
+    saturation_repeats: int = 1,
+    saturation_seed: int = 20261116,
+    saturation_workers: int = 1,
+    saturation_keep_draws: bool = False,
     # Diagnostic: keep each model's raw reply per row (see _raw_capture.py)
     test: bool = False,
 ):
@@ -3096,7 +3102,13 @@ Categorize {cove_noun} {cove_categorize}:
     _saturation_stats = {}
     _saturation_lock = threading.Lock()
     if saturation:
-        from ._saturation import run_saturation
+        from ._saturation import (category_orders, check_saturation_options, describe_grid,
+                                  run_saturation)
+        _sat_variants = check_saturation_options(saturation_variants, saturation_orders,
+                                                 saturation_repeats, saturation_workers)
+        _sat_orders = category_orders(len(categories), saturation_orders, saturation_seed)
+        print(describe_grid(len(categories), _sat_variants, saturation_orders, _sat_orders,
+                            saturation_repeats))
 
     # Classification function for single model + single item (text, PDF page, or image)
     def classify_single(cfg: dict, item, _recorder=None, _row=None) -> tuple:
@@ -3336,7 +3348,7 @@ Categorize {cove_noun} {cove_categorize}:
                 response_text = item
 
                 if saturation:
-                    # One call per wording variant, majority across them (_saturation.py)
+                    # One call per prompt in the grid, majority across them (_saturation.py)
                     json_result, error, _sat = run_saturation(
                         client=client,
                         response_text=response_text,
@@ -3354,6 +3366,11 @@ Categorize {cove_noun} {cove_categorize}:
                         extract_json_fn=extract_json,
                         formatter_fallback_fn=_try_formatter_fallback,
                         retry_delay=retry_delay,
+                        variants=_sat_variants,
+                        categories=categories,
+                        orders=_sat_orders,
+                        repeats=saturation_repeats,
+                        workers=saturation_workers,
                     )
                     if _row is not None:
                         with _saturation_lock:
@@ -3820,7 +3837,8 @@ Categorize {cove_noun} {cove_categorize}:
 
     # Build output DataFrames
     print("Building output DataFrames...")
-    _sat_kwargs = {"saturation_stats": _saturation_stats} if saturation else {}
+    _sat_kwargs = ({"saturation_stats": _saturation_stats,
+                    "saturation_keep_draws": saturation_keep_draws} if saturation else {})
     if _raw_store is None:
         return build_output_dataframes(
             all_results,
@@ -3849,6 +3867,7 @@ def build_output_dataframes(
     save_directory: str,
     raw_capture=None,
     saturation_stats=None,
+    saturation_keep_draws=False,
 ) -> dict:
     """
     Build the output DataFrames from classification results.
@@ -3996,7 +4015,8 @@ def build_output_dataframes(
     # Saturation: cells become proportions of draws (mean assignment rate)
     if saturation_stats is not None:
         from ._saturation import apply_saturation_proportions
-        apply_saturation_proportions(combined_df, saturation_stats, model_names, num_categories)
+        apply_saturation_proportions(combined_df, saturation_stats, model_names, num_categories,
+                                     keep_draws=saturation_keep_draws)
 
     # Create consensus-only DataFrame
     consensus_cols = ["input_data", "processing_status", "failed_models"]

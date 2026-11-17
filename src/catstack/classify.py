@@ -201,6 +201,12 @@ def classify(
     system_prompt: str = "",
     prompt_style: str = "current",
     saturation: bool = False,
+    saturation_orders: int = 1,
+    saturation_variants: Optional[list] = None,
+    saturation_repeats: int = 1,
+    saturation_seed: int = 20261116,
+    saturation_workers: int = 1,
+    saturation_keep_draws: bool = False,
     prompt_tune: Union[bool, int] = False,
     tune_iterations: int = 3,
     tune_ui: str = "browser",
@@ -252,9 +258,29 @@ def classify(
             the draws differ only in wording. Each category cell then holds the
             proportion of usable draws that assigned it (2 of 10 -> 0.2), and
             saturation_draws gives the number of usable draws. 10 calls per
-            response per model. Text input only; not combinable with batch_mode,
-            chain_of_thought, chain_of_verification, step_back_prompt,
-            context_prompt, categories_per_call or two_step_classify. Default False.
+            response per model with the defaults below. Text input only; not
+            combinable with batch_mode, chain_of_thought, chain_of_verification,
+            step_back_prompt, context_prompt, categories_per_call or
+            two_step_classify. Default False.
+        saturation_orders (int): Category orders crossed with every wording
+            variant. 1 (default) keeps the original order. N > 1 adds N-1
+            shuffled orders (the same ones for every response, from
+            saturation_seed); each shown order is numbered 1..K from the top and
+            the replies are mapped back to the original categories. Capped at
+            K! for K categories (2 orders for 2 categories, 6 for 3), in which
+            case every order is used.
+        saturation_variants (list of str): Wording variants to use, e.g. ["v01"]
+            for an order-only grid. Default None (all ten, v01-v10).
+        saturation_repeats (int): Times each prompt in the grid is sent.
+            Default 1. At temperature 0 a repeat returns the same reply; repeats
+            are for models that can't run at temperature 0 (a sampling-noise
+            control, e.g. saturation_variants=["v01"], saturation_repeats=10).
+        saturation_seed (int): Seed for the shuffled category orders.
+        saturation_workers (int): Draws sent at once for each response.
+            Default 1 (one after another).
+        saturation_keep_draws (bool): Add a saturation_detail column with every
+            draw's 0/1 codes, as JSON {"v03_o07_r00": "0100...", ...} in original
+            category order (null for an unusable draw). Default False.
         step_back_prompt (bool): Enable step-back prompting.
         context_prompt (bool): Add expert context to prompts.
         thinking_budget (int): A single token-count reasoning knob, translated
@@ -512,6 +538,14 @@ def classify(
         if creativity not in (None, 0):
             print(f"[CatLLM] saturation=True: draws use temperature 0; creativity={creativity} "
                   "is not used.")
+        from ._saturation import check_saturation_options
+        saturation_variants = check_saturation_options(
+            saturation_variants, saturation_orders, saturation_repeats, saturation_workers)
+        if saturation_orders > 1 and collect_examples(
+                example1, example2, example3, example4, example5, example6, examples):
+            print("[CatLLM] saturation_orders > 1: the categories are renumbered in each shuffled "
+                  "order. Examples that name a category by its number will not follow it; name "
+                  "categories by their text instead.")
 
     # Build models list
     if models is None:
@@ -720,9 +754,10 @@ def classify(
     if saturation:
         _strategy_warnings.append(
             "[CatLLM] NOTE: saturation=True is enabled.\n"
-            "  Each response is classified once per prompt-wording variant (10 variants)\n"
-            "  at temperature 0. Each category cell holds the proportion of draws that\n"
-            "  assigned it (e.g. 0.2 = 2 of 10). Cost: 10x API calls per response."
+            "  Each response is classified once per prompt in the saturation grid\n"
+            "  (wording variants x category orders x repeats) at temperature 0. Each\n"
+            "  category cell holds the proportion of draws that assigned it (e.g. 0.2 =\n"
+            "  2 of 10). Cost: one API call per prompt in the grid, per response."
         )
 
     if chain_of_verification:
@@ -1201,6 +1236,12 @@ def classify(
         system_prompt=system_prompt,
         prompt_style=prompt_style,
         saturation=saturation,
+        saturation_orders=saturation_orders,
+        saturation_variants=saturation_variants,
+        saturation_repeats=saturation_repeats,
+        saturation_seed=saturation_seed,
+        saturation_workers=saturation_workers,
+        saturation_keep_draws=saturation_keep_draws,
         **({"test": True} if test else {}),
     )
     return _maybe_apply_embeddings(result)
