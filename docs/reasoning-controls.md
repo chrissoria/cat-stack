@@ -13,7 +13,7 @@ the CHANGELOG and the 2026-06-12 audit that motivated the fixes).
 | Google Gemini | `thinkingConfig: {thinkingBudget: 0}`; tiers rejecting 0 fall back to the 128 minimum (cached) | Off (verified: Flash thoughts=0), or floor-minimized on thinking-only tiers (verified: 3.1 Pro thoughts=128 vs 243 uncontrolled) |
 | xAI grok hybrid (e.g. grok-4.3) | `reasoning_effort: "low"` sent; **measured ineffective** (206 reasoning tokens with `low`, 206 default) | **Provider default (ON)** — no working off-switch on hybrids |
 | xAI grok `*-non-reasoning` variant | **nothing sent** — reasoning_effort is withheld because the field paradoxically turns reasoning ON for these variants (verified: 0 tokens with no field, 207 with `low`) | Off (by variant) |
-| HF-routed Qwen3 family | `chat_template_kwargs: {enable_thinking: false}` | Off (verified: 0 vs ~390 reasoning tokens) |
+| HF-routed Qwen3 family (and Kimi K2.6) | `chat_template_kwargs: {enable_thinking: false}` plus `reasoning_effort: "none"` (dropped and cached off if a router 400-rejects it) | Off (verified: 0 vs ~390 reasoning tokens). The router now serves some of these through OpenRouter, which ignores `chat_template_kwargs`: Qwen3.8-27B on `:deepinfra`/`:novita` reasoned 89-550 tokens per call with the kwarg alone, and 0 with `reasoning_effort: "none"` added (2026-11-16) |
 | HF-routed gpt-oss, Kimi K2 | **none deliverable** — the router 400-rejects `enable_thinking` for these templates and exposes no effort field | **Provider default (reasoning ON)** — one-time warning printed |
 | Ollama reasoning-capable models | top-level `think` field (enum for gpt-oss, boolean for qwen3/deepseek-r1) | Off/low |
 | Non-reasoning models (Gemma, Mistral Large, …) | n/a | n/a |

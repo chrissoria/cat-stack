@@ -673,6 +673,16 @@ def apply_model_params(
         # router rejects the kwarg even for a model we expected to support it.
         if thinking_budget == 0 and _hf_model_needs_enable_thinking_off(model):
             payload["chat_template_kwargs"] = {"enable_thinking": False}
+            # The router serves some of these models through OpenRouter, which
+            # ignores chat_template_kwargs: Qwen3.8-27B on :deepinfra and
+            # :novita reasoned on every call (89-550 reasoning tokens, 10-40 s
+            # per classification; verified 2026-11-16). OpenRouter honors
+            # reasoning_effort "none" (0 reasoning tokens, ~1 s), and a vLLM
+            # backend the router reaches directly (:nscale) accepts the field.
+            # A router that rejects it has it dropped by complete()'s 400
+            # fallback, which then leaves it off for that client.
+            if not ov.get("hf_no_reasoning_effort", False):
+                payload["reasoning_effort"] = "none"
         elif (
             thinking_budget == 0
             and _hf_model_reasons_by_default(model)
@@ -1147,6 +1157,9 @@ class UnifiedLLMClient:
             ),
             "xai_no_reasoning_effort": getattr(
                 self, "_xai_no_reasoning_effort", False
+            ),
+            "hf_no_reasoning_effort": getattr(
+                self, "_hf_no_reasoning_effort", False
             ),
             "google_thinking_floor": getattr(self, "_google_thinking_floor", 0),
         }
@@ -1690,6 +1703,29 @@ class UnifiedLLMClient:
                                 self._warned_no_chat_template_kwargs = True
                             payload.pop("chat_template_kwargs")
                             continue  # Retry immediately without chat_template_kwargs
+
+                    # HF: reasoning_effort "none" rides with chat_template_kwargs
+                    # to switch Qwen3-family reasoning off (see
+                    # apply_model_params). A router that rejects the field gets
+                    # it dropped, not lowered to "low" as in the OpenAI fallback
+                    # below: "low" would turn reasoning on. Cached on the client.
+                    if (
+                        self.provider in ("huggingface", "huggingface-together")
+                        and "reasoning_effort" in payload
+                        and "reasoning_effort" in error_text
+                        and any(phrase in error_text for phrase in (
+                            "unsupported", "not permitted", "not allowed", "invalid",
+                            "extra inputs", "extra fields", "unknown field",
+                        ))
+                    ):
+                        if not getattr(self, '_warned_hf_no_reasoning_effort', False):
+                            print(f"\n[CatLLM] Model '{self.model}' does not accept reasoning_effort.")
+                            print(f"  Dropping the param and retrying. (reasoning may stay on if this router "
+                                  f"also ignores chat_template_kwargs.)\n")
+                            self._warned_hf_no_reasoning_effort = True
+                        self._hf_no_reasoning_effort = True
+                        payload.pop("reasoning_effort")
+                        continue
 
                     # OpenAI reasoning_effort enum varies across model
                     # families — gpt-5.4+ deprecated "minimal" in favor of
